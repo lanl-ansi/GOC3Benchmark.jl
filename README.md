@@ -14,7 +14,7 @@ command line-executable scripts in the `scripts` directory.
 Alternatively, to reproduce the calling method used by the GOC evaluation
 platform, you may interact with the `scripts/MyJulia1.jl` script directly.
 ```
-$ julia --compiled-modules=no -e `include("MyJulia1.jl"); MyJulia1(ProblemFile, TimeLimitInSeconds, Division, NetworkModel, AllowSwitching)' &>MyJulia1.log
+$ julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1(ProblemFile, TimeLimitInSeconds, Division, NetworkModel, AllowSwitching)' &>MyJulia1.log
 ```
 where arguments to `MyJulia1` are as follows:
 - `ProblemFile`
