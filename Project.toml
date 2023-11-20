@@ -1,0 +1,4 @@
+name = "GOC3Benchmark"
+uuid = "3a45b339-860d-44d0-a64b-5f943cdd120b"
+authors = ["Robert Parker", "Carleton Coffrin"]
+version = "0.1.0"
