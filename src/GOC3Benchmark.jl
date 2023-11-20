@@ -1,7 +1,5 @@
 module GOC3Benchmark
 
-function run_ac_uc_solver(args::Dict{String, Any})
-    println("RUNNING FAKE AC-UC SOLVER FUNCTION")
-end
+include("ac_uc_solver.jl")
 
 end
