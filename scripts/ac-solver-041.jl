@@ -109,15 +109,13 @@ function code1(case_file::String, time_limit::Int, division::Int, model::String,
     #evaluation_summary(case_file, output_file_path, 1, solve_time)
 end
 
-# TODO: Check whether this file is the one being executed, rather than whether
-# we are running interactively
-if isinteractive() == false
+if abspath(PROGRAM_FILE) == @__FILE__
     # NOTE: This script depends on arg parsing functionality in common.jl
     main(parse_goc_c3_args())
-else
-    # TODO: There is no settings.jl. This branch should not exist. This code is
-    # only intended to be used as part of command line-executable scripts, e.g.
-    # by running this file directoy or running it through MyJulia1
-    include("settings.jl")
-    main(settings)
+#else
+#    # TODO: There is no settings.jl. This branch should not exist. This code is
+#    # only intended to be used as part of command line-executable scripts, e.g.
+#    # by running this file directoy or running it through MyJulia1
+#    include("settings.jl")
+#    main(settings)
 end
