@@ -1,6 +1,6 @@
 using JuMP
 
-include("scheduling_model.jl")
+#include("scheduling_model.jl")
 
 function _process_schedule_data(input_data::NamedTuple, schedule_data::NamedTuple)
     periods = input_data.periods

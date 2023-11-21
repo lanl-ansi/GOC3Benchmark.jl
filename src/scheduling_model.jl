@@ -8,8 +8,8 @@ using HiGHS
 # Note that both of these files are being included in multiple
 # locations. Is this bad? What is the alternative?
 # - Appears to cause a warning "Replacing docs..."
-include("power_curves.jl")
-include("reserves.jl")
+#include("power_curves.jl")
+#include("reserves.jl")
 
 function add_power_variables!(model, sdd_ts_lookup, periods, sdd_ids)
     p = @variable(model, 

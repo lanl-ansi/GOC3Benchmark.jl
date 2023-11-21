@@ -1,7 +1,7 @@
 using JuMP
 using HiGHS
 
-include("power_curves.jl")
+#include("power_curves.jl")
 
 """
 Usage:
