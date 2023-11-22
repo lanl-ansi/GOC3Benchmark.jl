@@ -79,7 +79,7 @@ function check_solution_file(problem_file, solution_file)
 
 end
 
-@testset "Test run_ac_uc_solver function" begin
+@testset "Test problem file-solution file I/O" begin
 
     # Division 1
     problem_file = joinpath(datadir, "C3E4N00073D1_scenario_303.json")
