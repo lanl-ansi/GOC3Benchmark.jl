@@ -5,20 +5,40 @@ Julia scripts for solving the GOC-3 AC Unit Commitment problem.
 
 The GOC-3 AC Unit Commitment problem formulation may be found on the GO Competition
 [website](https://gocompetition.energy.gov/challenges/challenge-3/formulation).
-A solver for the competition accepts input data as a JSON file and produces
+A solver for the competition problem accepts input data as a JSON file and produces
 its output as another JSON file.
 Solutions may be evaluated using the
 [C3DataUtilities](https://github.com/GOCompetition/C3DataUtilities)
 Python package. The JSON files accepted and produced by the solver are described
 [here](https://gocompetition.energy.gov/challenges/challenge-3/data_format).
-Data used for testing is included in the `test/data` directory of this repository.
-All data used in the competition is available
+Problem data files used for testing are included in the `test/data` directory of
+this repository. All problem files used in the competition are available
 [here](https://gocompetition.energy.gov/challenges/600650/datasets).
 
 ## Installing this package
-- Dependencies
-- Installation
-- Run tests
+This package has the following dependencies:
+- JuMP.jl
+- HiGHS.jl
+- Ipopt.jl
+- MathOptSymbolicAD.jl
+- ArgParse.jl
+- JSON.jl
+- Printf.jl
+
+This package is not registered and must be installed using a copy of this repository.
+For example:
+```
+$ git clone https://github.com/lanl-ansi/GOC3Benchmark.jl.git
+$ cd GOC3Benchmark.jl
+```
+```julia
+julia> ]
+(@v1.X) pkg> add .
+```
+To make sure that the package is installed correctly, please run the tests with
+```
+$ julia test/runtests.jl
+```
 
 ## Using the solver
 The primary method of calling this solver is to use one the the
