@@ -28,14 +28,15 @@ function code1(case_file::String, time_limit::Int, division::Int, model::String,
 
     # The character after the first "D" in the file name should be the
     # division number
-    division_loc = findfirst("D", case_file)[1] + 1
-    division = case_file[division_loc:division_loc]
+    case_file_basename = basename(case_file)
+    division_loc = findfirst("D", case_file_basename)[1] + 1
+    division = case_file_basename[division_loc:division_loc]
     division = parse(Int, division)
 
     # The five characters after the first "N" in the file name should be
     # the number of buses
-    network_loc = findfirst("N", case_file)[1] + 1
-    network = case_file[network_loc:network_loc+4]
+    network_loc = findfirst("N", case_file_basename)[1] + 1
+    network = case_file_basename[network_loc:network_loc+4]
     nbus = parse(Int, network)
 
     println("Running solver for division $division on network with $nbus buses")
