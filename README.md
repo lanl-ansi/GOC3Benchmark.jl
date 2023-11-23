@@ -83,5 +83,19 @@ $ julia scripts/ac-uc-solver.jl -c test/data/C3E4N00073D1_scenario_303.json
 This script writes the solution file to the input file's directory, with the
 same name as the input file other than `.json` replaced with `_solution.json`.
 The script will remove solution files if the `--remove-solution` argument is set.
+In addition to solving the problem and producing an output file, this script
+uses the `C3DataUtilities` Python package to evaluate the solution and
+display results. This relies on `PyCall.jl`, and on the ability to find
+a Python installation with access to the `C3DataUtilities` package.
 
 ## Structure of this repository
+
+Of the Julia "library" code contained in this package, the `run_ac_uc_solver`
+function in the `src/ac_uc_solver.jl` file is the primary driver.
+This driver operates primarily by calling "subroutines,"  which accept
+input data and return output data for the three subproblems:
+copper-plate unit commitment, ACOPF, and reserve allocation.
+The "subroutines" may be found in the `scheduler.jl`, `opf.jl`, and `reserves.jl`
+files. Each of these subproblems build and solve one or more JuMP models.
+The code to construct the models themselves may be found in the
+`scheduling_model.jl`, `opf_model.jl`, and `reserves.jl` files.
