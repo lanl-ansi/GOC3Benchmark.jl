@@ -41,14 +41,24 @@ $ julia test/runtests.jl
 ```
 
 ## Using the solver
-The primary method of calling this solver is to use one the the
-command line-executable scripts in the `scripts` directory.
-Alternatively, to reproduce the calling method used by the GOC evaluation
-platform, you may interact with the `scripts/MyJulia1.jl` script directly.
+Challenge 3 of the GO Competition expects Julia submissions in the form of a
+single `MyJulia1.jl` file, which contains a function `MyJulia1`. This file
+is provided in the top-level of this repository. The APIs expected by the
+competition evaluation platform are documented
+[here](https://gocompetition.energy.gov/languages).
+The solver may be run with:
 ```
 $ julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1(ProblemFile, TimeLimitInSeconds, Division, NetworkModel, AllowSwitching)' &>MyJulia1.log
 ```
 where arguments to `MyJulia1` are as follows:
+| Argument | Julia type | Example |
+| -------- | ---------- | ------- |
+| `ProblemFile` | String | `"test/data/C3E4N00073D1_scenario_303.jl"` |
+| `TimeLimitInSeconds` | Int | 600 |
+| `Division` | Int | 1 |
+| `NetworkModel` | String | `"C3E4N00073"` |
+| `AllowSwitching` | Int | 1 |
+
 - `ProblemFile`
 - `TimeLimitInSeconds`
 - `Division`
@@ -64,6 +74,12 @@ running the solver via either of the above methods. For the competition,
 `JULIA_NUM_THREADS=50` was used to allow all 48 ACOPF subproblems to run in
 parallel for Division 2, although the optimal number of threads will of course
 depend on your machine.
+
+The primary method of calling this solver is to use the
+command line-executable script in the `scripts` directory, `ac-uc-solver.jl`.
+This is a command-line wrapper around the underlying Julia functionality
+that aims to 
+
 
 ## Test datasets
 
