@@ -3,6 +3,18 @@ The ARPA-E Benchmark Algorithm for Challenge 3 of the Grid Optimization
 Competition. This repository contains Julia code and command line-executable
 Julia scripts for solving the GOC-3 AC Unit Commitment problem.
 
+The GOC-3 AC Unit Commitment problem formulation may be found on the GO Competition
+[website](https://gocompetition.energy.gov/challenges/challenge-3/formulation).
+A solver for the competition accepts input data as a JSON file and produces
+its output as another JSON file.
+Solutions may be evaluated using the
+[C3DataUtilities](https://github.com/GOCompetition/C3DataUtilities)
+Python package. The JSON files accepted and produced by the solver are described
+[here](https://gocompetition.energy.gov/challenges/challenge-3/data_format).
+Data used for testing is included in the `test/data` directory of this repository.
+All data used in the competition is available
+[here](https://gocompetition.energy.gov/challenges/600650/datasets).
+
 ## Installing this package
 - Dependencies
 - Installation
