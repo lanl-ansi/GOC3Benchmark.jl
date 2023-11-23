@@ -107,7 +107,7 @@ function code1(case_file::String, time_limit::Int, division::Int, model::String,
 
     # TODO: evalution_summary should be run when running this script directly,
     # but not when running via MyJulia1.jl
-    #evaluation_summary(case_file, output_file_path, 1, solve_time)
+    evaluation_summary(case_file, output_file_path, 1, solve_time)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
