@@ -53,34 +53,35 @@ $ julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1(ProblemFile, 
 where arguments to `MyJulia1` are as follows:
 | Argument | Julia type | Example |
 | -------- | ---------- | ------- |
-| `ProblemFile` | String | `"test/data/C3E4N00073D1_scenario_303.jl"` |
-| `TimeLimitInSeconds` | Int | 600 |
-| `Division` | Int | 1 |
-| `NetworkModel` | String | `"C3E4N00073"` |
-| `AllowSwitching` | Int | 1 |
-
-- `ProblemFile`
-- `TimeLimitInSeconds`
-- `Division`
-- `NetworkModel`
-- `AllowSwitching`
+| `ProblemFile` | `String` | `"test/data/C3E4N00073D1_scenario_303.json"` |
+| `TimeLimitInSeconds` | `Int` | 600 |
+| `Division` | `Int` | 1 |
+| `NetworkModel` | `String` | `"C3E4N00073"` |
+| `AllowSwitching` | `Int` | 1 |
 
 When running via this API, solutions are written to `solution.json` in the
 working directory, as in the competition.
+Note that, in this solver, the "basename" of the `ProblemFile` string **must contain**
+the network name as a 6-character substring `N#####`. In this solver,
+the number of buses is extracted from this string and used to set some parameters.
 
 For a more realistic representation of the benchmark code used by the
 competition, set the `JULIA_NUM_THREADS` environment variable before
-running the solver via either of the above methods. For the competition,
+running the solver. For the competition,
 `JULIA_NUM_THREADS=50` was used to allow all 48 ACOPF subproblems to run in
 parallel for Division 2, although the optimal number of threads will of course
 depend on your machine.
 
-The primary method of calling this solver is to use the
-command line-executable script in the `scripts` directory, `ac-uc-solver.jl`.
-This is a command-line wrapper around the underlying Julia functionality
-that aims to 
-
-
-## Test datasets
+Alternatively to using `MyJulia1.jl`, the solver may be run via the
+`scripts/ac-uc-solver.jl` script.
+The only required argument to this script is `-c CASE`, which must specify
+the path to the input data file.
+For example:
+```
+$ julia scripts/ac-uc-solver.jl -c test/data/C3E4N00073D1_scenario_303.json
+```
+This script writes the solution file to the input file's directory, with the
+same name as the input file other than `.json` replaced with `_solution.json`.
+The script will remove solution files if the `--remove-solution` argument is set.
 
 ## Structure of this repository
