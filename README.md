@@ -31,7 +31,7 @@ For example:
 $ git clone https://github.com/lanl-ansi/GOC3Benchmark.jl.git
 $ cd GOC3Benchmark.jl
 ```
-```julia-repl
+```julia
 julia> ]
 (@v1.X) pkg> add .
 ```
