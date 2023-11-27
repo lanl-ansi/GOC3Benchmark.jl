@@ -2,6 +2,9 @@
 using ArgParse
 using JSON
 
+using HiGHS
+using Gurobi
+
 """common.jl
 This file contains common option parsing functionality to help drive command
 line-executable Julia scripts that execute the benchmark algorithm.
@@ -11,6 +14,19 @@ to running the MyJulia1.jl script directly.
 
 function get_output_file_path(input_file_path::String)
     return replace(input_file_path, ".json" => "_solution.json")
+end
+
+function get_optimizer(solver_name::String)
+    name_to_optimizer = Dict(
+        "gurobi" => Gurobi.Optimizer,
+        "highs" => HiGHS.Optimizer,
+    )
+    if !(solver_name in keys(name_to_optimizer))
+        throw(ArgumentError(
+            "Unsupported solver specified. Supported options are: gurobi, highs"
+        ))
+    end
+    return name_to_optimizer[solver_name]
 end
 
 function main(args)
@@ -35,8 +51,21 @@ function main(args)
     println("  $(model)")
     println("  $(switching_allowed)")
 
+    println("MIP solver: $(args["mip-solver"])")
+
+    mip_optimizer = get_optimizer(args["mip-solver"])
+
     time_start = time()
-    code1(case, args["time-limit"], division, model, switching_allowed, output_file_path, use_hsl=!args["no-hsl"])
+    code1(
+        case,
+        args["time-limit"],
+        division,
+        model,
+        switching_allowed,
+        output_file_path,
+        use_hsl=!args["no-hsl"],
+        mip_optimizer = mip_optimizer,
+    )
     code1_time = time() - time_start
 end
 
@@ -67,6 +96,11 @@ function parse_goc_c3_args()
                     For this to work, C3DataUtilities must be installed in
                     the Python installation that PyCall knows about."
             action = :store_true
+        "--mip-solver"
+            help = "Solver to use for the MILP unit commitment subproblem.
+                    (default: gurobi)"
+            arg_type = String
+            default = "gurobi"
     end
 
     return parse_args(s)

@@ -1,10 +1,10 @@
 #!/usr/bin/env -S julia -t16
 
-using Gurobi
-
 include("common.jl")
 
 import GOC3Benchmark as benchmark
+
+using Gurobi
 
 """A prototype of the solver we plan to run in Event 4.
 
@@ -16,7 +16,18 @@ Simplifications:
 
 """
 
-function code1(case_file::String, time_limit::Int, division::Int, model::String, switching_allowed::Int, output_file_path::String; use_hsl::Bool=true)
+function code1(
+    case_file::String,
+    time_limit::Int,
+    division::Int,
+    model::String,
+    switching_allowed::Int,
+    output_file_path::String;
+    use_hsl::Bool=true,
+    # TODO: What is the right data type for mip_optimizer here?
+    # MOI.OptimizerWithAttributes?
+    mip_optimizer = Gurobi.Optimizer,
+)
     time_start = time()
 
     verbose = true
@@ -67,7 +78,7 @@ function code1(case_file::String, time_limit::Int, division::Int, model::String,
         "print_program_info" => verbose,
         "print_solver_info" => verbose,
         "scheduler_time_limit" => mip_time_limit,
-        "mip_optimizer" => Gurobi.Optimizer,
+        "mip_optimizer" => mip_optimizer,
         "linear_solver" => "ma27",
         "allow_switching" => Bool(switching_allowed),
         "warmstart_mip" => true,
