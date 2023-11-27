@@ -1,7 +1,7 @@
 # GOC Challenge 3 Benchmark Algorithm
 The ARPA-E Benchmark Algorithm for Challenge 3 of the Grid Optimization
-Competition. This repository contains Julia code and command line-executable
-Julia scripts for solving the GOC-3 AC Unit Commitment problem.
+Competition. This repository contains Julia code and a command line-executable
+Julia script for solving the GOC-3 AC Unit Commitment problem.
 
 The GOC-3 AC Unit Commitment problem formulation may be found on the GO Competition
 [website](https://gocompetition.energy.gov/challenges/challenge-3/formulation).
@@ -19,6 +19,7 @@ this repository. All problem files used in the competition are available
 This package has the following dependencies:
 - JuMP.jl
 - HiGHS.jl
+- Gurobi.jl (only necessary for using the command line-executable script)
 - Ipopt.jl
 - MathOptSymbolicAD.jl
 - ArgParse.jl
@@ -30,6 +31,7 @@ For example:
 ```
 $ git clone https://github.com/lanl-ansi/GOC3Benchmark.jl.git
 $ cd GOC3Benchmark.jl
+$ julia
 ```
 ```julia
 julia> ]
@@ -59,6 +61,11 @@ where arguments to `MyJulia1` are as follows:
 | `NetworkModel` | `String` | `"C3E4N00073"` |
 | `AllowSwitching` | `Int` | 1 |
 
+For example:
+```
+$ julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1("test/data/C3E4N00073D1_scenario_303.json", 600, 1, "C3E4N00073", 1)' &>MyJulia1.log
+```
+
 When running via this API, solutions are written to `solution.json` in the
 working directory, as in the competition.
 Note that, in this solver, the "basename" of the `ProblemFile` string **must contain**
@@ -69,8 +76,7 @@ For a more realistic representation of the benchmark code used by the
 competition, set the `JULIA_NUM_THREADS` environment variable before
 running the solver. For the competition,
 `JULIA_NUM_THREADS=50` was used to allow all 48 ACOPF subproblems to run in
-parallel for Division 2, although the optimal number of threads will of course
-depend on your machine.
+parallel for Division 2.
 
 Alternatively to using `MyJulia1.jl`, the solver may be run via the
 `scripts/ac-uc-solver.jl` script.
@@ -80,13 +86,24 @@ For example:
 ```
 $ julia scripts/ac-uc-solver.jl -c test/data/C3E4N00073D1_scenario_303.json
 ```
+For a list of all options, run
+```
+$ julia scripts/ac-uc-solver.jl --help
+```
+
 This script writes the solution file to the input file's directory, with the
 same name as the input file other than `.json` replaced with `_solution.json`.
 The script will remove solution files if the `--remove-solution` argument is set.
-In addition to solving the problem and producing an output file, this script
-uses the `C3DataUtilities` Python package to evaluate the solution and
+
+If the `--evaluate-solution` argument is set, this script will
+use the `C3DataUtilities` Python package to evaluate the solution and
 display results. This relies on `PyCall.jl`, and on the ability to find
 a Python installation with access to the `C3DataUtilities` package.
+
+The default solver for the unit commitment subproblem (when running via the
+command line) is Gurobi. If Gurobi is not available, and you would like to run
+with an open-source MIP solver, use the `--mip-solver=highs` option.
+Note that the tests do not use Gurobi.
 
 ## Structure of this repository
 
