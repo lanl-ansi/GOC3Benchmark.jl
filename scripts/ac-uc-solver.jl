@@ -1,4 +1,4 @@
-#!/usr/bin/env -S julia -t16
+#!/usr/bin/env -S julia
 
 include("common.jl")
 
