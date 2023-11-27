@@ -8,14 +8,21 @@
 #
 
 using PyCall
-pushfirst!(PyVector(pyimport("sys")."path"), joinpath(@__DIR__, "..", "C3DataUtilities"))
+
+# With this line, we would rely on C3DataUtilities being located in a specific
+# location. We will instead rely on it having been installed
+#pushfirst!(PyVector(pyimport("sys")."path"), joinpath(@__DIR__, "..", "C3DataUtilities"))
+
 goc_checkdata = pyimport("check_data")
 goc_validation = pyimport("datautilities.validation")
 
 check_data_configuration = PyObject(nothing)
 check_data_pop_solution = PyObject(nothing)
 check_data_parameters = "{}"
-config_file_path = joinpath(@__DIR__, "..", "C3DataUtilities", goc_checkdata.default_config_file)
+
+# Again, we avoid relying on C3DataUtilities's location
+#config_file_path = joinpath(@__DIR__, "..", "C3DataUtilities", goc_checkdata.default_config_file)
+config_file_path = joinpath(dirname(goc_checkdata.__file__), goc_checkdata.default_config_file)
 
 function evaluation_summary(case_file::AbstractString, solution_file::AbstractString, workers::Int, solver_runtime::Real)
 
@@ -26,11 +33,17 @@ function evaluation_summary(case_file::AbstractString, solution_file::AbstractSt
     solution_errors_file_path = replace(case_file, ".json" => "_$(goc_checkdata.solution_errors_file)")
 
     result = goc_validation.check_data(
-        case_file, solution_file,
-        config_file_path, check_data_configuration, check_data_parameters,
-        summary_csv_file_path, summary_json_file_path,
-        data_errors_file_path, ignored_errors_file_path,
-        solution_errors_file_path, check_data_pop_solution
+        case_file,
+        solution_file,
+        config_file_path,
+        check_data_configuration,
+        check_data_parameters,
+        summary_csv_file_path,
+        summary_json_file_path,
+        data_errors_file_path,
+        ignored_errors_file_path,
+        solution_errors_file_path,
+        check_data_pop_solution,
     )
 
     case_id = replace(basename(case_file), ".json" => "")

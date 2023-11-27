@@ -3,11 +3,6 @@
 using Gurobi
 
 include("common.jl")
-# TODO: eval.jl should be a "conditional dependency". I think this can be
-# accomplished by moving it into some condition branch at the bottom of this
-# file.
-include("eval.jl")
-#include("ac-uc-solver-000.jl")
 
 import GOC3Benchmark as benchmark
 
@@ -104,19 +99,29 @@ function code1(case_file::String, time_limit::Int, division::Int, model::String,
     benchmark.run_ac_uc_solver(args)
 
     solve_time = time() - time_start
-
-    # TODO: evalution_summary should be run when running this script directly,
-    # but not when running via MyJulia1.jl
-    evaluation_summary(case_file, output_file_path, 1, solve_time)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
     # NOTE: This script depends on arg parsing functionality in common.jl
-    main(parse_goc_c3_args())
-#else
-#    # TODO: There is no settings.jl. This branch should not exist. This code is
-#    # only intended to be used as part of command line-executable scripts, e.g.
-#    # by running this file directoy or running it through MyJulia1
-#    include("settings.jl")
-#    main(settings)
+    args = parse_goc_c3_args()
+    case_file = args["case"]
+    output_file_path = get_output_file_path(case_file)
+
+    time_start = time()
+    main(args)
+    solve_time = time() - time_start
+
+    # HACK: Conditionally include eval.jl so PyCall (and C3DataUtilities) are
+    # only required if --evaluate-solution is set.
+    # This is done outside of the main function as including eval.jl from
+    # within main gives a method error when calling evaluation_summary.
+    if args["evaluate-solution"]
+        include("eval.jl")
+        evaluation_summary(case_file, output_file_path, 1, solve_time)
+    end
+
+    if args["remove-solution"]
+        @warn("removing solution file $(output_file_path)")
+        rm(output_file_path)
+    end
 end

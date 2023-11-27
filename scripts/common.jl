@@ -9,6 +9,9 @@ These scripts may be used as potentially more user-friendly alternatives
 to running the MyJulia1.jl script directly.
 """
 
+function get_output_file_path(input_file_path::String)
+    return replace(input_file_path, ".json" => "_solution.json")
+end
 
 function main(args)
     case = args["case"]
@@ -17,7 +20,7 @@ function main(args)
     model = "MODEL"
     switching_allowed = 1
 
-    output_file_path = replace(case, ".json" => "_solution.json")
+    output_file_path = get_output_file_path(case)
 
     println("case size: $(filesize(case))")
 
@@ -35,13 +38,6 @@ function main(args)
     time_start = time()
     code1(case, args["time-limit"], division, model, switching_allowed, output_file_path, use_hsl=!args["no-hsl"])
     code1_time = time() - time_start
-
-    #evaluation_summary(args["case"], length(Distributed.workers()), code1_time)
-
-    if args["remove-solution"]
-        @warn("removing solution file $(output_file_path)")
-        rm(output_file_path)
-    end
 end
 
 
@@ -65,6 +61,11 @@ function parse_goc_c3_args()
             action = :store_true
         "--remove-solution"
             help = "delete the solution files after competition"
+            action = :store_true
+        "--evaluate-solution"
+            help = "Evaluate the solution using the C3DataUtilities program.
+                    For this to work, C3DataUtilities must be installed in
+                    the Python installation that PyCall knows about."
             action = :store_true
     end
 
