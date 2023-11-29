@@ -12,3 +12,6 @@ JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 MathOptSymbolicAD = "309f4015-3481-4d63-a8f9-aeb13adfe8eb"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
