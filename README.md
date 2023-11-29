@@ -116,3 +116,7 @@ The "subroutines" may be found in the `scheduler.jl`, `opf.jl`, and `reserves.jl
 files. Each of these subproblems build and solve one or more JuMP models.
 The code to construct the models themselves may be found in the
 `scheduling_model.jl`, `opf_model.jl`, and `reserves.jl` files.
+
+## License
+This software is provided under a BSD license as part of the Grid Optimization
+Competition Solvers project, C19076. See LICENSE.md.
