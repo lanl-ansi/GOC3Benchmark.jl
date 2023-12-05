@@ -26,20 +26,16 @@ This package has the following dependencies:
 - JSON.jl
 - Printf.jl
 
-This package is not registered and must be installed using a copy of this repository.
+This package is not registered and must be installed from this repository.
 For example:
-```
-$ git clone https://github.com/lanl-ansi/GOC3Benchmark.jl.git
-$ cd GOC3Benchmark.jl
-$ julia
-```
 ```julia
 julia> ]
-(@v1.X) pkg> add .
+(@v1.X) pkg> add https://github.com/lanl-ansi/GOC3Benchmark.jl.git
 ```
 To make sure that the package is installed correctly, please run the tests with
-```
-$ julia test/runtests.jl
+```julia
+julia> ]
+(@v1.X) pkg> test GOC3Benchmark
 ```
 
 ## Using the solver
