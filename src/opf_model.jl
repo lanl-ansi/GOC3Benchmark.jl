@@ -144,9 +144,51 @@ function preprocess_topology_data(input_data::NamedTuple)
 end
 
 
-function add_real_reactive_linear_constraints!(model, sdd_ids, data)
-    sdd_lookup = data.sdd_lookup
+#function add_real_reactive_linear_constraints!(model, sdd_ids, data)
+#    sdd_lookup = data.sdd_lookup
+#
+#    q_bound = Dict(uid => sdd_lookup[uid]["q_bound_cap"] for uid in sdd_ids)
+#    q_linear = Dict(uid => sdd_lookup[uid]["q_linear_cap"] for uid in sdd_ids)
+#    pq_bound_sdds = [uid for uid in sdd_ids if q_bound[uid] == 1]
+#    pq_linear_sdds = [uid for uid in sdd_ids if q_linear[uid] == 1]
+#    q_0_ub = Dict(uid => sdd_lookup[uid]["q_0_ub"] for uid in pq_bound_sdds)
+#    q_0_lb = Dict(uid => sdd_lookup[uid]["q_0_lb"] for uid in pq_bound_sdds)
+#    beta_ub = Dict(uid => sdd_lookup[uid]["beta_ub"] for uid in pq_bound_sdds)
+#    beta_lb = Dict(uid => sdd_lookup[uid]["beta_lb"] for uid in pq_bound_sdds)
+#    q_0 = Dict(uid => sdd_lookup[uid]["q_0"] for uid in pq_linear_sdds)
+#    beta = Dict(uid => sdd_lookup[uid]["beta"] for uid in pq_linear_sdds)
+#
+#    p = model[:p_sdd]
+#    q = model[:q_sdd]
+#    pq_ub = @constraint(
+#        model,
+#        [uid in pq_bound_sdds],
+#        q[uid] <= q_0_ub[uid] + beta_ub[uid]*p[uid]
+#    )
+#    pq_lb = @constraint(
+#        model,
+#        [uid in pq_bound_sdds],
+#        q[uid] >= q_0_lb[uid] + beta_lb[uid]*p[uid]
+#    )
+#    pq_eq = @constraint(
+#        model,
+#        [uid in pq_linear_sdds],
+#        q[uid] == q_0[uid] + beta[uid]*p[uid]
+#    )
+#    return pq_ub, pq_lb, pq_eq
+#end
 
+
+function add_real_reactive_linear_constraints!(
+    model,
+    sdd_ids,
+    data;
+    p = nothing,
+    q = nothing,
+    periods = nothing,
+    on_su_sd_status = nothing,
+)
+    sdd_lookup = data.sdd_lookup
     q_bound = Dict(uid => sdd_lookup[uid]["q_bound_cap"] for uid in sdd_ids)
     q_linear = Dict(uid => sdd_lookup[uid]["q_linear_cap"] for uid in sdd_ids)
     pq_bound_sdds = [uid for uid in sdd_ids if q_bound[uid] == 1]
@@ -158,26 +200,71 @@ function add_real_reactive_linear_constraints!(model, sdd_ids, data)
     q_0 = Dict(uid => sdd_lookup[uid]["q_0"] for uid in pq_linear_sdds)
     beta = Dict(uid => sdd_lookup[uid]["beta"] for uid in pq_linear_sdds)
 
-    p = model[:p_sdd]
-    q = model[:q_sdd]
+    if periods === nothing
+        periods = [nothing]
+    end
+    if p === nothing
+        p = Dict((uid, i) => model[:p_sdd][uid] for uid in sdd_ids for i in periods)
+    end
+    if q === nothing
+        q = Dict((uid, i) => model[:q_sdd][uid] for uid in sdd_ids for i in periods)
+    end
+    if on_su_sd_status === nothing
+        on_su_sd_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
+    end
+
     pq_ub = @constraint(
         model,
-        pq_ub[uid in pq_bound_sdds],
-        # No need to add u_on/su/sd, as we already know the device
-        # is "active" if we are including it in this formulation.
-        q[uid] <= q_0_ub[uid] + beta_ub[uid]*p[uid]
+        pq_ub[uid in pq_bound_sdds, i in periods],
+        q[uid, i] <= q_0_ub[uid]*on_su_sd_status[uid, i] + beta_ub[uid]*p[uid, i]
     )
     pq_lb = @constraint(
         model,
-        pq_lb[uid in pq_bound_sdds],
-        q[uid] >= q_0_lb[uid] + beta_lb[uid]*p[uid]
+        pq_lb[uid in pq_bound_sdds, i in periods],
+        q[uid, i] >= q_0_lb[uid]*on_su_sd_status[uid, i] + beta_lb[uid]*p[uid, i]
     )
     pq_eq = @constraint(
         model,
-        pq_eq[uid in pq_linear_sdds],
-        q[uid] == q_0[uid] + beta[uid]*p[uid]
+        pq_eq[uid in pq_linear_sdds, i in periods],
+        q[uid, i] == q_0[uid]*on_su_sd_status[uid, i] + beta[uid]*p[uid, i]
     )
     return pq_ub, pq_lb, pq_eq
+end
+
+
+function add_semicontinuous_bound_constraints!(
+    model::JuMP.Model,
+    data::NamedTuple;
+    periods = nothing,
+    on_status = nothing,
+    on_su_sd_status = nothing,
+)
+    sdd_ids = data.sdd_ids
+    sdd_ts_lookup = data.sdd_ts_lookup
+    if periods === nothing
+        periods = [nothing]
+        p = Dict((uid, i) => model[:p_sdd][uid] for uid in sdd_ids for i in periods)
+        q = Dict((uid, i) => model[:q_sdd][uid] for uid in sdd_ids for i in periods)
+        on_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
+        on_su_sd_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
+    else
+        p = model[:p_sdd]
+        q = model[:q_sdd]
+    end
+
+    p_lb = Dict(uid => sdd_ts_lookup[uid]["p_lb"] for uid in sdd_ids)
+    p_ub = Dict(uid => sdd_ts_lookup[uid]["p_ub"] for uid in sdd_ids)
+    q_lb = Dict(uid => sdd_ts_lookup[uid]["q_lb"] for uid in sdd_ids)
+    q_ub = Dict(uid => sdd_ts_lookup[uid]["q_ub"] for uid in sdd_ids)
+    
+    # Real power bounds
+    p_semicont = @constraint(model, p_semicont[uid in sdd_ids, i in periods],
+        p_lb[uid][i]*on_status[uid, i] <= p[uid, i] <= p_ub[uid][i]*on_status[uid, i]
+    )
+    q_semicont = @constraint(model, q_semicont[uid in sdd_ids, i in periods],
+        q_lb[uid][i]*on_su_sd_status[uid, i] <= q[uid, i] <= q_ub[uid][i]*on_su_sd_status[uid, i]
+    )
+    return p_semicont, q_semicont
 end
 
 
@@ -292,8 +379,7 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
     on_status_dict = get(
         args, "on_status", Dict(uid => 1 for uid in sdd_ids)
     )
-    # By default, do not populate, as for now devices present in this
-    # dictionary will have their real powers fixed.
+    # By default, do not populate
     p_dict = get(args, "real_power", Dict())
     ###
 
@@ -879,6 +965,124 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
     #end
 
     #println(model)
+
+    return model
+end
+
+
+function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
+    if args === nothing
+        args = Dict{String, Any}()
+    end
+    # These are the options supported by get_ac_opf_model. The exact options
+    # we will support here are TBD.
+    print_program_info = get(args, "print_program_info", false)
+    fix_real_power = get(args, "fix_real_power", false)
+    relax_power_balance = get(args, "relax_power_balance", true)
+    # relax_power_balance serves as a default for relax_p/q_balance.
+    relax_p_balance = get(args, "relax_p_balance", relax_power_balance)
+    relax_q_balance = get(args, "relax_q_balance", relax_power_balance)
+    penalize_power_deviation = get(args, "penalize_power_deviation", false)
+    max_balance_violation = get(args, "max_balance_violation", nothing)
+    allow_switching = get(args, "allow_switching", true)
+    fix_shunt_steps = get(args, "fix_shunt_steps", false)
+    relax_thermal_limits = get(args, "relax_thermal_limits", false)
+    sdd_to_lb = get(args, "sdd_to_lb", Vector())
+    sdd_to_ub = get(args, "sdd_to_ub", Vector())
+
+    vad_ub = deg2rad(30)
+    vad_lb = -vad_ub
+    (
+     dt, periods, bus_lookup, bus_ids, shunt_lookup, shunt_ids, ac_line_lookup,
+     ac_line_ids, twt_lookup, twt_ids, dc_line_lookup, dc_line_ids, sdd_lookup,
+     sdd_ts_lookup, sdd_ids, sdd_ids_producer, sdd_ids_consumer, violation_cost,
+     azr_lookup, azr_ts_lookup, azr_ids, rzr_lookup, rzr_ts_lookup, rzr_ids,
+    ) = data
+
+    # If not provided, create default dicts that do not filter any SDDs
+    #
+    # on_status is used to determine which devices should have their power levels
+    # fixed (i.e. are in su/sd curves). We use a dict that is ducktype-compatible
+    # with on_status variables from the UC problem
+    if "on_status" in keys(args)
+        on_status = Dict((uid, i) => args["on_status"][uid][i] for uid in sdd_ids for i in periods)
+    else
+        on_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
+    end
+    # This is used to determine if devices are in an SU/SD curve when on_status=0.
+    # If this
+    p_dict = get(args, "real_power", Dict())
+
+    # This is an indicator that a device is online or in an SU/SD curve.
+    # Eventually, I will want this to be a JuMP expression
+    on_su_sd_status = Dict{Tuple{String, Int}, Any}()
+    for uid in sdd_ids
+        for i in periods
+            if uid in keys(p_dict)
+                # If this devices was assigned a nonzero power, it is either
+                # on or in a power curve
+                on_su_sd_status[uid, i] = Int(p_dict[uid] > 1e-6)
+            else
+                # Otherwise, we just use the on status
+                on_su_sd_status[uid, i] = on_status[uid, i]
+            end
+        end
+    end
+
+    # I would like to implement "activity" with explicit on status dict that maps
+    # devices and time periods to whether they are online. Then this can later be
+    # updated to use the on status variable in the UC model.
+    #
+    #sdd_ids, sdd_ids_producer, sdd_ids_consumer = _filter_inactive_sdds(
+    #    processed_data, on_status_dict, p_dict; tolerance = 1e-6
+    #)
+
+    if !allow_switching
+        println("switching must be allowed in multiperiod ACOPF")
+        throw(Exception)
+    end
+    ac_on_status_dict = Dict(uid => [1 for _ in periods] for uid in ac_line_ids)
+    twt_on_status_dict = Dict(uid => [1 for _ in periods] for uid in twt_ids)
+
+    topo_data = preprocess_topology_data(data)
+    branch_fr_keys = topo_data.branch_fr_keys
+    branch_to_keys = topo_data.branch_to_keys
+    branch_keys = topo_data.branch_keys
+    bus_sdd_ids = topo_data.bus_sdd_ids
+    bus_sdd_producer_ids = topo_data.bus_sdd_producer_ids
+    bus_sdd_consumer_ids = topo_data.bus_sdd_consumer_ids
+    bus_shunt_ids = topo_data.bus_shunt_ids
+    bus_branch_keys = topo_data.bus_branch_keys
+
+    model = JuMP.Model()
+    # In a loop, construct variables and constraints for ACOPF at every point
+    # in time.
+    @variable(model, bus_lookup[uid]["vm_lb"] <= vm[uid in bus_ids, t in periods] <= bus_lookup[uid]["vm_ub"], start=1.0)
+    @variable(model, va[uid in bus_ids, t in periods])
+    @variable(model,
+        sdd_ts_lookup[uid]["p_lb"][t] <= p_sdd[uid in sdd_ids, t in periods] <= sdd_ts_lookup[uid]["p_ub"][t]
+    )
+    @variable(model,
+        sdd_ts_lookup[uid]["q_lb"][t] <= q_sdd[uid in sdd_ids, t in periods] <= sdd_ts_lookup[uid]["q_ub"][t]
+    )
+    @variable(model, p_branch[uid in branch_keys, t in periods])
+    @variable(model, q_branch[uid in branch_keys, t in periods])
+    if relax_thermal_limits
+        @variable(model, ac_thermal_slack[uid in ac_line_ids, t in periods] >= 0.0)
+        @variable(model, twt_thermal_slack[uid in twt_ids, t in periods] >= 0.0)
+    end
+
+    # These constraints are now indexed by periods.
+    # These constraints, and probably others, will need u_su+u_sd+u_on
+    pq_ub, pq_lb, pq_eq = add_real_reactive_linear_constraints!(
+        model, sdd_ids, data; p=p_sdd, q=q_sdd, periods=periods, on_su_sd_status=on_su_sd_status
+    )
+    # For now, these constraints serve the purpose of fixing devices that are not online.
+    # (Otherwise the bounds imposed are redundant.)
+    # In the future, they will actually incorporate discrete variables.
+    add_semicontinuous_bound_constraints!(
+        model, data, periods=periods, on_status=on_status, on_su_sd_status=on_su_sd_status
+    )
 
     return model
 end
