@@ -141,6 +141,11 @@ function get_contiguous_power_curves(input_data::NamedTuple; tolerance = 1e-8)
     return supc, p_supc, sdpc, p_sdpc
 end
 
+"""
+Returns u_su and u_sd indicators per the problem formulation. These are 1
+on the first interval after a SU curve or the first interval of an SD
+curve.
+"""
 function get_su_sd_from_on_status(input_data::NamedTuple, on_status::Dict)
     uids = input_data.sdd_ids
     periods = input_data.periods
@@ -170,6 +175,11 @@ function get_su_sd_from_on_status(input_data::NamedTuple, on_status::Dict)
     return u_su, u_sd
 end
 
+"""
+Returns indicators of whether we are in an SU/SD power curve and lookups
+of the corresponding SU/SD power. Note the difference between these indicators
+and u_su/u_sd from the problem formulation.
+"""
 function get_supc_sdpc_lookups(
     input_data::NamedTuple, on_status::Dict; tolerance = 1e-8
 )
