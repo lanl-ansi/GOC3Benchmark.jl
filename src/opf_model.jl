@@ -1753,6 +1753,121 @@ function extract_data_from_model(
     return opf_solution
 end
 
+"""Extract data from solution to multiperiod model
+
+on_status is required so we can distinguish between p_on and p_su/sd.
+    It should map uids to an arrays of binary values.
+
+"""
+function extract_data_from_multiperiod_model(
+    model, 
+    data,
+    on_status,
+)
+    solution_data = Dict{String, Any}()
+
+    #
+    # Add solution data for buses
+    #
+    bus_key = "bus"
+    bus_map = Dict{String, Dict}()
+    for uid in data.bus_ids
+        bus_uid_map = Dict{String, Any}()
+        bus_uid_map["vm"] = Vector(JuMP.value.(model[:vm][uid, :]))
+        bus_uid_map["va"] = Vector(JuMP.value.(model[:va][uid, :]))
+        # TODO: Extract duals in solution data if requested
+        #if model_has_duals
+        #    # Need names for these constraints
+        #    bus_uid_map["p_balance_dual"] = JuMP.dual(model[:p_balance][uid])
+        #    bus_uid_map["q_balance_dual"] = JuMP.dual(model[:q_balance][uid])
+        #end
+        bus_map[uid] = bus_uid_map
+    end
+    solution_data[bus_key] = bus_map
+
+    #
+    # Add solution data for shunts
+    #
+    shunt_key = "shunt"
+    shunt_map = Dict{String, Any}()
+    for uid in data.shunt_ids
+        shunt_uid_map = Dict{String, Any}(
+            #"step" => data.shunt_lookup[uid]["initial_status"]["step"],
+            "step" => Vector(JuMP.value.(model[:shunt_step][uid, :])),
+        )
+        shunt_map[uid] = shunt_uid_map
+    end
+    solution_data[shunt_key] = shunt_map
+
+    #
+    # Add solution data for SDDs
+    #
+    sdd_key = "simple_dispatchable_device"
+    sdd_map = Dict{String, Any}()
+    for uid in data.sdd_ids
+        sdd_uid_map = Dict{String, Any}(
+            # Just use the on status that was provided
+            # Probably don't even need to include on_status in this dict.
+            "on_status" => on_status[uid],
+            "p_on" => [0.0 for _ in data.periods],
+            "q" => Vector(JuMP.value.(model[:q_sdd][uid, :])),
+        )
+        for i in data.periods
+            if Bool(on_status[uid][i])
+                sdd_uid_map["p_on"][i] = JuMP.value(model[:p_sdd][uid, i])
+            end
+        end
+        sdd_map[uid] = sdd_uid_map
+    end
+    solution_data[sdd_key] = sdd_map
+
+    #
+    # Add solution data for AC lines
+    #
+    ac_key = "ac_line"
+    ac_map = Dict{String, Any}()
+    for uid in data.ac_line_ids
+        # TODO: Potentially support !allow_switching?
+        ac_map[uid] = Dict{String, Any}(
+            "on_status" => [1 for _ in data.periods],
+        )
+    end
+    solution_data[ac_key] = ac_map
+
+    #
+    # Add solution data for TWT
+    #
+    twt_key = "two_winding_transformer"
+    twt_map = Dict{String, Any}()
+    for uid in data.twt_ids
+        # TODO: Potentially support !allow_switching
+        twt_map[uid] = Dict(
+            "tm" => [data.twt_lookup[uid]["initial_status"]["tm"] for _ in data.periods],
+            "ta" => [data.twt_lookup[uid]["initial_status"]["ta"] for _ in data.periods],
+            "on_status" => [1 for _ in data.periods],
+        )
+    end
+    solution_data[twt_key] = twt_map
+
+    #
+    # Add solution data for DC lines
+    #
+    dc_key = "dc_line"
+    dc_map = Dict{String, Any}()
+    for uid in data.dc_line_ids
+        fr_bus = data.dc_line_lookup[uid]["fr_bus"]
+        to_bus = data.dc_line_lookup[uid]["to_bus"]
+        dc_uid_map = Dict{String, Any}()
+        dc_uid_map["pdc_fr"] = Vector(JuMP.value.(model[:p_branch][(uid, fr_bus, to_bus), :]))
+        dc_uid_map["qdc_fr"] = Vector(JuMP.value.(model[:q_branch][(uid, fr_bus, to_bus), :]))
+        dc_uid_map["qdc_to"] = Vector(JuMP.value.(model[:q_branch][(uid, to_bus, fr_bus), :]))
+        dc_map[uid] = dc_uid_map
+    end
+    solution_data[dc_key] = dc_map
+
+    return solution_data
+end
+
 function compute_line_capacity_ub(input_data, branch_id, frbus_id, tobus_id)
     acl_set = keys(input_data.ac_line_lookup)
     twt_set = keys(input_data.twt_lookup)
