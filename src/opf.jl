@@ -576,14 +576,18 @@ function compute_multiperiod_opf(
             )
         end
     end
-    args = Dict("on_status" => on_status)
+    args = Dict(
+        "on_status" => on_status,
+        # TODO: Allow an option to relax, round, and re-solve shunt steps
+        "fix_shunt_steps" => true,
+    )
     model = get_multiperiod_acopf_model(data, args=args)
 
     JuMP.set_optimizer(model, optimizer)
     MOI.set(model, Ipopt.CallbackFunction(), ipopt_acceptable_callback)
     JuMP.optimize!(
         model,
-        _differentiation_backend = MathOptSymbolicAD.DefaultBackend()
+        _differentiation_backend = MathOptSymbolicAD.DefaultBackend(),
     )
     output_data = extract_data_from_multiperiod_model(
         model,

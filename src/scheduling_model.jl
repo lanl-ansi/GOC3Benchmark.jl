@@ -669,7 +669,11 @@ Constraints (102-103) and (112-113)
 """
 function add_reactive_power_implication_constraints!(
     model, input_data, T_su_pc, T_sd_pc;
-    include_reserves = false
+    include_reserves = false,
+    q=nothing,
+    u_on=nothing,
+    u_su=nothing,
+    u_sd=nothing,
 )
     sdd_ts_lookup = input_data.sdd_ts_lookup
     periods = input_data.periods
@@ -678,10 +682,18 @@ function add_reactive_power_implication_constraints!(
     sdd_ids_producer = input_data.sdd_ids_producer
     q_max = Dict(uid => sdd_ts_lookup[uid]["q_ub"] for uid in sdd_ids)
     q_min = Dict(uid => sdd_ts_lookup[uid]["q_lb"] for uid in sdd_ids)
-    q = model[:q]
-    u_on = model[:p_on_status]
-    u_su = model[:u_su]
-    u_sd = model[:u_sd]
+    if q === nothing
+        q = model[:q]
+    end
+    if u_on === nothing
+        u_on = model[:p_on_status]
+    end
+    if u_su === nothing
+        u_su = model[:u_su]
+    end
+    if u_sd === nothing
+        u_sd = model[:u_sd]
+    end
     if include_reserves
         q_qru = model[:q_qru]
         q_qrd = model[:q_qrd]

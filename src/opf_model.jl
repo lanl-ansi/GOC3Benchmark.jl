@@ -144,51 +144,9 @@ function preprocess_topology_data(input_data::NamedTuple)
 end
 
 
-#function add_real_reactive_linear_constraints!(model, sdd_ids, data)
-#    sdd_lookup = data.sdd_lookup
-#
-#    q_bound = Dict(uid => sdd_lookup[uid]["q_bound_cap"] for uid in sdd_ids)
-#    q_linear = Dict(uid => sdd_lookup[uid]["q_linear_cap"] for uid in sdd_ids)
-#    pq_bound_sdds = [uid for uid in sdd_ids if q_bound[uid] == 1]
-#    pq_linear_sdds = [uid for uid in sdd_ids if q_linear[uid] == 1]
-#    q_0_ub = Dict(uid => sdd_lookup[uid]["q_0_ub"] for uid in pq_bound_sdds)
-#    q_0_lb = Dict(uid => sdd_lookup[uid]["q_0_lb"] for uid in pq_bound_sdds)
-#    beta_ub = Dict(uid => sdd_lookup[uid]["beta_ub"] for uid in pq_bound_sdds)
-#    beta_lb = Dict(uid => sdd_lookup[uid]["beta_lb"] for uid in pq_bound_sdds)
-#    q_0 = Dict(uid => sdd_lookup[uid]["q_0"] for uid in pq_linear_sdds)
-#    beta = Dict(uid => sdd_lookup[uid]["beta"] for uid in pq_linear_sdds)
-#
-#    p = model[:p_sdd]
-#    q = model[:q_sdd]
-#    pq_ub = @constraint(
-#        model,
-#        [uid in pq_bound_sdds],
-#        q[uid] <= q_0_ub[uid] + beta_ub[uid]*p[uid]
-#    )
-#    pq_lb = @constraint(
-#        model,
-#        [uid in pq_bound_sdds],
-#        q[uid] >= q_0_lb[uid] + beta_lb[uid]*p[uid]
-#    )
-#    pq_eq = @constraint(
-#        model,
-#        [uid in pq_linear_sdds],
-#        q[uid] == q_0[uid] + beta[uid]*p[uid]
-#    )
-#    return pq_ub, pq_lb, pq_eq
-#end
-
-
-function add_real_reactive_linear_constraints!(
-    model,
-    sdd_ids,
-    data;
-    p = nothing,
-    q = nothing,
-    periods = nothing,
-    on_su_sd_status = nothing,
-)
+function add_real_reactive_linear_constraints!(model, sdd_ids, data)
     sdd_lookup = data.sdd_lookup
+
     q_bound = Dict(uid => sdd_lookup[uid]["q_bound_cap"] for uid in sdd_ids)
     q_linear = Dict(uid => sdd_lookup[uid]["q_linear_cap"] for uid in sdd_ids)
     pq_bound_sdds = [uid for uid in sdd_ids if q_bound[uid] == 1]
@@ -200,76 +158,24 @@ function add_real_reactive_linear_constraints!(
     q_0 = Dict(uid => sdd_lookup[uid]["q_0"] for uid in pq_linear_sdds)
     beta = Dict(uid => sdd_lookup[uid]["beta"] for uid in pq_linear_sdds)
 
-    if periods === nothing
-        # Really, we would like something like a "null index", which is an identity
-        # with respect to the cartesian (set) product.
-        # How should this behave when iterating over only this identity set?
-        # We need some way of accessing an unindexed component with a null index.
-        # Pyomo's convention is to use the singleton {None}.
-        periods = [nothing]
-    end
-    if p === nothing
-        p = Dict((uid, i) => model[:p_sdd][uid] for uid in sdd_ids for i in periods)
-    end
-    if q === nothing
-        q = Dict((uid, i) => model[:q_sdd][uid] for uid in sdd_ids for i in periods)
-    end
-    if on_su_sd_status === nothing
-        on_su_sd_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
-    end
-
+    p = model[:p_sdd]
+    q = model[:q_sdd]
     pq_ub = @constraint(
         model,
-        pq_ub[uid in pq_bound_sdds, i in periods],
-        q[uid, i] <= q_0_ub[uid]*on_su_sd_status[uid, i] + beta_ub[uid]*p[uid, i]
+        [uid in pq_bound_sdds],
+        q[uid] <= q_0_ub[uid] + beta_ub[uid]*p[uid]
     )
     pq_lb = @constraint(
         model,
-        pq_lb[uid in pq_bound_sdds, i in periods],
-        q[uid, i] >= q_0_lb[uid]*on_su_sd_status[uid, i] + beta_lb[uid]*p[uid, i]
+        [uid in pq_bound_sdds],
+        q[uid] >= q_0_lb[uid] + beta_lb[uid]*p[uid]
     )
     pq_eq = @constraint(
         model,
-        pq_eq[uid in pq_linear_sdds, i in periods],
-        q[uid, i] == q_0[uid]*on_su_sd_status[uid, i] + beta[uid]*p[uid, i]
+        [uid in pq_linear_sdds],
+        q[uid] == q_0[uid] + beta[uid]*p[uid]
     )
     return pq_ub, pq_lb, pq_eq
-end
-
-
-function add_semicontinuous_bound_constraints!(
-    model::JuMP.Model,
-    data::NamedTuple;
-    periods = nothing,
-    on_status = nothing,
-    on_su_sd_status = nothing,
-)
-    sdd_ids = data.sdd_ids
-    sdd_ts_lookup = data.sdd_ts_lookup
-    if periods === nothing
-        periods = [nothing]
-        p = Dict((uid, i) => model[:p_sdd][uid] for uid in sdd_ids for i in periods)
-        q = Dict((uid, i) => model[:q_sdd][uid] for uid in sdd_ids for i in periods)
-        on_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
-        on_su_sd_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
-    else
-        p = model[:p_sdd]
-        q = model[:q_sdd]
-    end
-
-    p_lb = Dict(uid => sdd_ts_lookup[uid]["p_lb"] for uid in sdd_ids)
-    p_ub = Dict(uid => sdd_ts_lookup[uid]["p_ub"] for uid in sdd_ids)
-    q_lb = Dict(uid => sdd_ts_lookup[uid]["q_lb"] for uid in sdd_ids)
-    q_ub = Dict(uid => sdd_ts_lookup[uid]["q_ub"] for uid in sdd_ids)
-    
-    # Real power bounds
-    p_semicont = @constraint(model, p_semicont[uid in sdd_ids, i in periods],
-        p_lb[uid][i]*on_status[uid, i] <= p[uid, i] <= p_ub[uid][i]*on_status[uid, i]
-    )
-    q_semicont = @constraint(model, q_semicont[uid in sdd_ids, i in periods],
-        q_lb[uid][i]*on_su_sd_status[uid, i] <= q[uid, i] <= q_ub[uid][i]*on_su_sd_status[uid, i]
-    )
-    return p_semicont, q_semicont
 end
 
 
@@ -995,6 +901,20 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
     sdd_to_lb = get(args, "sdd_to_lb", Vector())
     sdd_to_ub = get(args, "sdd_to_ub", Vector())
 
+    if (
+        fix_real_power
+        || penalize_power_deviation
+        || !allow_switching
+        || !isempty(sdd_to_lb)
+        || !isempty(sdd_to_ub)
+    )
+        throw(ArgumentError(
+            "Invalid argument. fix_real_power, penalize_power_deviation,
+            allow_switching, sdd_to_lb, and sdd_to_ub should not be used
+            by get_multiperiod_acopf_model"
+        ))
+    end
+
     vad_ub = deg2rad(30)
     vad_lb = -vad_ub
     (
@@ -1021,39 +941,6 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
         orig_on_status = Dict(uid => [1 for i in periods] for uid in sdd_ids)
         on_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
     end
-
-    # This is used to determine if devices are in an SU/SD curve when on_status=0.
-    # We should not need this for the MP formulation, as we have the entire sequence
-    # of on-statuses
-    p_dict = get(args, "real_power", Dict())
-
-    # This is an indicator that a device is online or in an SU/SD curve.
-    # Eventually, I will want this to be a JuMP expression
-    # NOTE: This should not be necessary, as I can always (a) infer su/sd
-    # from on_status or (b) accept them as inputs (e.g. if they are variables).
-    # Will it ever be more convenient to use on-su-sd-status explicitly
-    # in this model? If so, I can construct it from on_status/u_su/u_sd.
-    on_su_sd_status = Dict{Tuple{String, Int}, Any}()
-    for uid in sdd_ids
-        for i in periods
-            if uid in keys(p_dict)
-                # If this devices was assigned a nonzero power, it is either
-                # on or in a power curve
-                on_su_sd_status[uid, i] = Int(p_dict[uid] > 1e-6)
-            else
-                # Otherwise, we just use the on status
-                on_su_sd_status[uid, i] = on_status[uid, i]
-            end
-        end
-    end
-
-    # I would like to implement "activity" with explicit on status dict that maps
-    # devices and time periods to whether they are online. Then this can later be
-    # updated to use the on status variable in the UC model.
-    #
-    #sdd_ids, sdd_ids_producer, sdd_ids_consumer = _filter_inactive_sdds(
-    #    processed_data, on_status_dict, p_dict; tolerance = 1e-6
-    #)
 
     if !allow_switching
         println("switching must be allowed in multiperiod ACOPF")
@@ -1100,33 +987,8 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
     #    @variable(model, twt_thermal_slack[uid in twt_ids, t in periods] >= 0.0)
     #end
 
-    # These constraints are now indexed by periods.
-    # These constraints, and probably others, will need u_su+u_sd+u_on
-    #
-    # This is necessary for the MP problem, but will not be necessary when
-    # building on top of the UC problem. Ideally, this could reuse the
-    # implementation from the UC model.
-    # Re-using the UC implementation requires the following additional data:
-    # - T_su/sd power curve intervals
-    # - u_su/sd status indicators
-    # Additionally, we would need to:
-    # - explicitly pass in p/q-sdd (to deal with different naming conventions)
-    # - Pass in a mocked-up u_on dict (with constants or variables)
-    # - use include_reserves=false
-    # The UC model implementation has the advantages of:
-    # - an option to include reserves
-    # - handle u_su/sd variables. Could this be a downside in some context?
-    #   - This implies a structural definition of on-su-sd status, which is good
-    # But what if I don't have u_su/u_sd? Is this a viable situation?
-    # - I can always infer on-su-sd from p-on
-    # - u_su/sd should be inferrable from on-status
-    #pq_ub, pq_lb, pq_eq = add_real_reactive_linear_constraints!(
-    #    model, sdd_ids, data; p=p_sdd, q=q_sdd, periods=periods, on_su_sd_status=on_su_sd_status
-    #)
-    # Alternative:
-    #_, p_su_ru, _, p_sd_rd = get_contiguous_power_curves(data)
     T_su_pc, T_sd_pc = get_inverse_power_curve_intervals(data)
-    # With fixed on status, we should be able to compute u_su/sd
+    # With fixed on status, we can compute u_su/sd
     # TODO: don't attempt to compute these if variables are provided (rather than
     # constants)
     u_su, u_sd = get_su_sd_from_on_status(data, orig_on_status)
@@ -1141,48 +1003,38 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
 
     in_supc, p_su, in_sdpc, p_sd = get_supc_sdpc_lookups(data, orig_on_status)
 
-    # For now, these constraints serve the purpose of fixing devices that are not online.
-    # (Otherwise the bounds imposed are redundant.)
-    # In the future, they will actually incorporate discrete variables.
-    #add_semicontinuous_bound_constraints!(
-    #    model, data, periods=periods, on_status=on_status, on_su_sd_status=on_su_sd_status
-    #)
-    # Alternatively, we can reuse the implementation from the scheduling model:
-    #
-    # Note that, in this OPF formulation, p_sdd is the aggregated p_on+p_su+p_sd
-    # variable. In the context where on-status is fixed, p_sdd will need to be
-    # fixed when we are in a power curve. The alternative is to add explicit
-    # p-su/sd variables and power curve constraints.
-    # However, there is nothing wrong with the following constraints. The p-su/sd
-    # implication constraints will be redundant, but that is okay.
-
     # Fix power for devices in power curves
     # NOTE: This will need to change if on-status is not fixed
-    mock_p_on = Dict()
     for uid in sdd_ids
         for i in periods
-            # Note that p_sdd is implicitly fixed by the above implications if
-            # on_status == 0.
             if Bool(in_supc[uid][i])
                 JuMP.fix(p_sdd[uid, i], p_su[uid][i], force = true)
             end
             if Bool(in_sdpc[uid][i])
                 JuMP.fix(p_sdd[uid, i], p_sd[uid][i], force = true)
             end
-            if Bool(on_status[uid, i])
-                mock_p_on[uid, i] = p_sdd[uid, i]
-            else
-                mock_p_on[uid, i] = 0.0
+            if !(Bool(in_supc[uid][i]) || Bool(in_sdpc[uid][i]) || Bool(on_status[uid, i]))
+                # If we're not online or in a power curve, fix power to zero
+                JuMP.fix(p_sdd[uid, i], 0.0, force = true)
             end
         end
     end
 
-    mock_p_su = Dict((uid, i) => p_su[uid][i] for uid in sdd_ids for i in periods)
-    mock_p_sd = Dict((uid, i) => p_sd[uid][i] for uid in sdd_ids for i in periods)
-    # Note that, with on_status fixed, this will give many trivial constraints
-    # (p_su/p_sd are constants).
-    add_on_su_sd_implication_constraints!(model, data; include_reserves=false,
-        p_on=mock_p_on, u_on=on_status, p_su=mock_p_su, p_sd=mock_p_sd,
+    # This function should be used if we have distinct variables for p_on/su/sd
+    #add_on_su_sd_implication_constraints!(model, data; include_reserves=false,
+    #    p_on=mock_p_on, u_on=on_status, p_su=mock_p_su, p_sd=mock_p_sd,
+    #)
+    # We implement our own implication constraints here, as we only need a subset
+    # of those from the scheduling_model
+    online_device_periods = [(uid, i) for uid in sdd_ids for i in periods if Bool(on_status[uid, i])]
+    p_on_implication = @constraint(model, [(uid, i) in online_device_periods],
+        sdd_ts_lookup[uid]["p_lb"][i] * on_status[uid, i]
+        <= p_sdd[uid, i]
+        <= sdd_ts_lookup[uid]["p_ub"][i] * on_status[uid, i]
+    )
+
+    add_reactive_power_implication_constraints!(model, data, T_su_pc, T_sd_pc;
+        include_reserves=false, q=q_sdd, u_on=on_status, u_su=u_su, u_sd=u_sd,
     )
 
     # TODO: Integer domain and explicitly relax?
@@ -1295,12 +1147,12 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
         ) for t in periods
     ))
 
-    # TODO: Implement constraints
-    # - Standard ACOPF constraints, now indexed by time
-    # - Ramping constraints
-    # - Potentiall max-energy-over-interval constraints?
+    # Constraints
+    # Note that we don't include max-energy-over-interval constraints/penalties,
+    # although they could be relevant here.
+
     if relax_p_balance
-        @NLconstraint(model, 
+        @NLconstraint(model,
             p_balance[uid in bus_ids, i in periods],
             sum(p_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -1315,7 +1167,7 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
             + (p_balance_slack_pos[uid, i] - p_balance_slack_neg[uid, i])
         )
     else
-        @NLconstraint(model, 
+        @NLconstraint(model,
             p_balance[uid in bus_ids, i in periods],
             sum(p_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -1329,7 +1181,7 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
         )
     end
     if relax_q_balance
-        @NLconstraint(model, 
+        @NLconstraint(model,
             q_balance[uid in bus_ids, i in periods],
             sum(q_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
