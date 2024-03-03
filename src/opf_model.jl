@@ -881,7 +881,11 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
 end
 
 
-function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
+function get_multiperiod_acopf_model(
+    data::NamedTuple;
+    args=nothing,
+    optimizer=nothing,
+)
     if args === nothing
         args = Dict{String, Any}()
     end
@@ -959,7 +963,11 @@ function get_multiperiod_acopf_model(data::NamedTuple; args=nothing)
     bus_shunt_ids = topo_data.bus_shunt_ids
     bus_branch_keys = topo_data.bus_branch_keys
 
-    model = JuMP.Model()
+    if optimizer === nothing
+        model = JuMP.Model()
+    else
+        model = JuMP.Model(optimizer)
+    end
 
     # In a loop, construct variables and constraints for ACOPF at every point
     # in time.
