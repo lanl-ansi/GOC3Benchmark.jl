@@ -469,24 +469,37 @@ Constraints (64-67)
 """
 function add_ramp_constraints!(
     model, sdd_lookup, periods, sdd_ids, dt;
+    p=nothing,
+    u_on=nothing,
+    u_su=nothing,
+    u_sd=nothing,
     tightening_fraction = 1.0
 )
+    if p === nothing
+        p = model[:p]
+    end
     # Note that this constraint doesn't need sdd_ts_lookup
     prev_p_lookup = Dict(
-        (uid, i) => (i == 1) ? sdd_lookup[uid]["initial_status"]["p"] : model[:p][uid, i-1]
+        (uid, i) => (i == 1) ? sdd_lookup[uid]["initial_status"]["p"] : p[uid, i-1]
         for uid in sdd_ids for i in periods
     )
     pjru = Dict(uid => sdd_lookup[uid]["p_ramp_up_ub"] for uid in sdd_ids)
     pjrd = Dict(uid => sdd_lookup[uid]["p_ramp_down_ub"] for uid in sdd_ids)
     pjrusu = Dict(uid => sdd_lookup[uid]["p_startup_ramp_ub"] for uid in sdd_ids)
     pjrdsd = Dict(uid => sdd_lookup[uid]["p_shutdown_ramp_ub"] for uid in sdd_ids)
-    u_on = model[:p_on_status]
-    u_su = model[:u_su]
-    u_sd = model[:u_sd]
+    if u_on === nothing
+        u_on = model[:p_on_status]
+    end
+    if u_su === nothing
+        u_su = model[:u_su]
+    end
+    if u_sd === nothing
+        u_sd = model[:u_sd]
+    end
     ramp_ub = @constraint(
         model,
         ramp_ub[uid in sdd_ids, i in periods],
-        model[:p][uid, i] - prev_p_lookup[uid, i] <= dt[i]*(
+        p[uid, i] - prev_p_lookup[uid, i] <= dt[i]*(
             tightening_fraction*pjru[uid]*(u_on[uid, i] - u_su[uid, i])
             + pjrusu[uid]*(u_su[uid, i] + 1 - u_on[uid, i])
         ),
@@ -494,7 +507,7 @@ function add_ramp_constraints!(
     ramp_lb = @constraint(
         model,
         ramp_lb[uid in sdd_ids, i in periods],
-        model[:p][uid, i] - prev_p_lookup[uid, i] >= -dt[i]*(
+        p[uid, i] - prev_p_lookup[uid, i] >= -dt[i]*(
             tightening_fraction*pjrd[uid]*u_on[uid, i] + pjrdsd[uid]*(1 - u_on[uid, i])
         ),
     )
@@ -506,17 +519,29 @@ Constraints (99-101) and (109-111)
 """
 function add_on_su_sd_implication_constraints!(
     model, input_data;
-    include_reserves = false
+    include_reserves = false,
+    p_on = nothing,
+    u_on = nothing,
+    p_su = nothing,
+    p_sd = nothing,
 )
     sdd_ts_lookup = input_data.sdd_ts_lookup
     periods = input_data.periods
     sdd_ids = input_data.sdd_ids
     sdd_ids_producer = input_data.sdd_ids_producer
     sdd_ids_consumer = input_data.sdd_ids_consumer
-    u_on = model[:p_on_status]
-    p_on = model[:p_on]
-    p_su = model[:p_su]
-    p_sd = model[:p_sd]
+    if u_on === nothing
+        u_on = model[:p_on_status]
+    end
+    if p_on === nothing
+        p_on = model[:p_on]
+    end
+    if p_su === nothing
+        p_su = model[:p_su]
+    end
+    if p_sd === nothing
+        p_sd = model[:p_sd]
+    end
     if include_reserves
         p_rgu = model[:p_rgu]
         p_rgd = model[:p_rgd]
@@ -644,7 +669,11 @@ Constraints (102-103) and (112-113)
 """
 function add_reactive_power_implication_constraints!(
     model, input_data, T_su_pc, T_sd_pc;
-    include_reserves = false
+    include_reserves = false,
+    q=nothing,
+    u_on=nothing,
+    u_su=nothing,
+    u_sd=nothing,
 )
     sdd_ts_lookup = input_data.sdd_ts_lookup
     periods = input_data.periods
@@ -653,10 +682,18 @@ function add_reactive_power_implication_constraints!(
     sdd_ids_producer = input_data.sdd_ids_producer
     q_max = Dict(uid => sdd_ts_lookup[uid]["q_ub"] for uid in sdd_ids)
     q_min = Dict(uid => sdd_ts_lookup[uid]["q_lb"] for uid in sdd_ids)
-    q = model[:q]
-    u_on = model[:p_on_status]
-    u_su = model[:u_su]
-    u_sd = model[:u_sd]
+    if q === nothing
+        q = model[:q]
+    end
+    if u_on === nothing
+        u_on = model[:p_on_status]
+    end
+    if u_su === nothing
+        u_su = model[:u_su]
+    end
+    if u_sd === nothing
+        u_sd = model[:u_sd]
+    end
     if include_reserves
         q_qru = model[:q_qru]
         q_qrd = model[:q_qrd]
@@ -722,7 +759,13 @@ Constraints (104-106) and (114-116)
 # TODO: These constraints will need to be updated (differentiate between
 # producers and consumers) when qrd/qru start being used.
 function add_real_reactive_linking_constraints!(
-    model, input_data, T_su_pc, T_sd_pc;
+    model,
+    input_data,
+    T_su_pc,
+    T_sd_pc;
+    pq = nothing,
+    u_on = nothing,
+    u_susd = nothing,
     include_reserves = false
 )
     sdd_lookup = input_data.sdd_lookup
@@ -745,11 +788,23 @@ function add_real_reactive_linking_constraints!(
     q_0 = Dict(uid => sdd_lookup[uid]["q_0"] for uid in pq_linear_sdds)
     beta = Dict(uid => sdd_lookup[uid]["beta"] for uid in pq_linear_sdds)
 
-    p = model[:p]
-    q = model[:q]
-    u_on = model[:p_on_status]
-    u_su = model[:u_su]
-    u_sd = model[:u_sd]
+    # Get default variables from model if not explicitly provided
+    if pq === nothing
+        p = model[:p]
+        q = model[:q]
+    else
+        p, q = pq
+    end
+    if u_on === nothing
+        u_on = model[:p_on_status]
+    end
+    if u_susd === nothing
+        u_su = model[:u_su]
+        u_sd = model[:u_sd]
+    else
+        u_su, u_sd = u_susd
+    end
+
     if include_reserves
         q_qru = model[:q_qru]
         q_qrd = model[:q_qrd]

@@ -162,19 +162,17 @@ function add_real_reactive_linear_constraints!(model, sdd_ids, data)
     q = model[:q_sdd]
     pq_ub = @constraint(
         model,
-        pq_ub[uid in pq_bound_sdds],
-        # No need to add u_on/su/sd, as we already know the device
-        # is "active" if we are including it in this formulation.
+        [uid in pq_bound_sdds],
         q[uid] <= q_0_ub[uid] + beta_ub[uid]*p[uid]
     )
     pq_lb = @constraint(
         model,
-        pq_lb[uid in pq_bound_sdds],
+        [uid in pq_bound_sdds],
         q[uid] >= q_0_lb[uid] + beta_lb[uid]*p[uid]
     )
     pq_eq = @constraint(
         model,
-        pq_eq[uid in pq_linear_sdds],
+        [uid in pq_linear_sdds],
         q[uid] == q_0[uid] + beta[uid]*p[uid]
     )
     return pq_ub, pq_lb, pq_eq
@@ -292,8 +290,7 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
     on_status_dict = get(
         args, "on_status", Dict(uid => 1 for uid in sdd_ids)
     )
-    # By default, do not populate, as for now devices present in this
-    # dictionary will have their real powers fixed.
+    # By default, do not populate
     p_dict = get(args, "real_power", Dict())
     ###
 
@@ -884,6 +881,536 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
 end
 
 
+function get_multiperiod_acopf_model(
+    data::NamedTuple;
+    args=nothing,
+    optimizer=nothing,
+)
+    if args === nothing
+        args = Dict{String, Any}()
+    end
+    # These are the options supported by get_ac_opf_model. The exact options
+    # we will support here are TBD.
+    print_program_info = get(args, "print_program_info", false)
+    fix_real_power = get(args, "fix_real_power", false)
+    relax_power_balance = get(args, "relax_power_balance", true)
+    # relax_power_balance serves as a default for relax_p/q_balance.
+    relax_p_balance = get(args, "relax_p_balance", relax_power_balance)
+    relax_q_balance = get(args, "relax_q_balance", relax_power_balance)
+    penalize_power_deviation = get(args, "penalize_power_deviation", false)
+    max_balance_violation = get(args, "max_balance_violation", nothing)
+    allow_switching = get(args, "allow_switching", true)
+    fix_shunt_steps = get(args, "fix_shunt_steps", false)
+    #relax_thermal_limits = get(args, "relax_thermal_limits", false)
+    sdd_to_lb = get(args, "sdd_to_lb", Vector())
+    sdd_to_ub = get(args, "sdd_to_ub", Vector())
+
+    if (
+        fix_real_power
+        || penalize_power_deviation
+        || !allow_switching
+        || !isempty(sdd_to_lb)
+        || !isempty(sdd_to_ub)
+    )
+        throw(ArgumentError(
+            "Invalid argument. fix_real_power, penalize_power_deviation,
+            allow_switching, sdd_to_lb, and sdd_to_ub should not be used
+            by get_multiperiod_acopf_model"
+        ))
+    end
+
+    vad_ub = deg2rad(30)
+    vad_lb = -vad_ub
+    (
+     dt, periods, bus_lookup, bus_ids, shunt_lookup, shunt_ids, ac_line_lookup,
+     ac_line_ids, twt_lookup, twt_ids, dc_line_lookup, dc_line_ids, sdd_lookup,
+     sdd_ts_lookup, sdd_ids, sdd_ids_producer, sdd_ids_consumer, violation_cost,
+     azr_lookup, azr_ts_lookup, azr_ids, rzr_lookup, rzr_ts_lookup, rzr_ids,
+    ) = data
+
+    # If not provided, create default dicts that do not filter any SDDs
+    #
+    # TODO: on_status is basically required. Maybe it should be a positional
+    # arg?
+    #
+    # on_status is used to determine which devices should have their power levels
+    # fixed (i.e. are in su/sd curves). We use a dict that is ducktype-compatible
+    # with on_status variables from the UC problem
+    if "on_status" in keys(args)
+        # We store the original on-status, as this data structure is required for
+        # a few data processing functions
+        orig_on_status = args["on_status"]
+        on_status = Dict((uid, i) => args["on_status"][uid][i] for uid in sdd_ids for i in periods)
+    else
+        orig_on_status = Dict(uid => [1 for i in periods] for uid in sdd_ids)
+        on_status = Dict((uid, i) => 1 for uid in sdd_ids for i in periods)
+    end
+
+    if !allow_switching
+        println("switching must be allowed in multiperiod ACOPF")
+        throw(Exception)
+    end
+    ac_on_status_dict = Dict(uid => [1 for _ in periods] for uid in ac_line_ids)
+    twt_on_status_dict = Dict(uid => [1 for _ in periods] for uid in twt_ids)
+
+    topo_data = preprocess_topology_data(data)
+    branch_fr_keys = topo_data.branch_fr_keys
+    branch_to_keys = topo_data.branch_to_keys
+    branch_keys = topo_data.branch_keys
+    bus_sdd_ids = topo_data.bus_sdd_ids
+    bus_sdd_producer_ids = topo_data.bus_sdd_producer_ids
+    bus_sdd_consumer_ids = topo_data.bus_sdd_consumer_ids
+    bus_shunt_ids = topo_data.bus_shunt_ids
+    bus_branch_keys = topo_data.bus_branch_keys
+
+    if optimizer === nothing
+        model = JuMP.Model()
+    else
+        model = JuMP.Model(optimizer)
+    end
+
+    # In a loop, construct variables and constraints for ACOPF at every point
+    # in time.
+    @variable(model, bus_lookup[uid]["vm_lb"] <= vm[uid in bus_ids, t in periods] <= bus_lookup[uid]["vm_ub"], start=1.0)
+    @variable(model, va[uid in bus_ids, t in periods])
+
+    # Since we will have on-status implication constraints, the domain of p/q-sdd
+    # variables always need to include zero.
+    @variable(model,
+        min(sdd_ts_lookup[uid]["p_lb"][t], 0.0)
+        <= p_sdd[uid in sdd_ids, t in periods]
+        <= max(sdd_ts_lookup[uid]["p_ub"][t], 0.0)
+    )
+    @variable(model,
+        min(sdd_ts_lookup[uid]["q_lb"][t], 0.0)
+        <= q_sdd[uid in sdd_ids, t in periods]
+        <= max(sdd_ts_lookup[uid]["q_ub"][t], 0.0)
+    )
+
+    @variable(model, p_branch[uid in branch_keys, t in periods])
+    @variable(model, q_branch[uid in branch_keys, t in periods])
+    # TODO: Support thermal limit relaxation if necessary
+    #if relax_thermal_limits
+    #    @variable(model, ac_thermal_slack[uid in ac_line_ids, t in periods] >= 0.0)
+    #    @variable(model, twt_thermal_slack[uid in twt_ids, t in periods] >= 0.0)
+    #end
+
+    T_su_pc, T_sd_pc = get_inverse_power_curve_intervals(data)
+    # With fixed on status, we can compute u_su/sd
+    # TODO: don't attempt to compute these if variables are provided (rather than
+    # constants)
+    u_su, u_sd = get_su_sd_from_on_status(data, orig_on_status)
+    # Create dicts that are ducktype-compatible with JuMP variables
+    u_su = Dict((uid, i) => u_su[uid][i] for uid in sdd_ids for i in periods)
+    u_sd = Dict((uid, i) => u_sd[uid][i] for uid in sdd_ids for i in periods)
+
+    add_real_reactive_linking_constraints!(
+        model, data, T_su_pc, T_sd_pc;
+        pq=(p_sdd, q_sdd), u_on=on_status, u_susd=(u_su, u_sd), include_reserves = false
+    )
+
+    in_supc, p_su, in_sdpc, p_sd = get_supc_sdpc_lookups(data, orig_on_status)
+
+    # Fix power for devices in power curves
+    # NOTE: This will need to change if on-status is not fixed
+    for uid in sdd_ids
+        for i in periods
+            if Bool(in_supc[uid][i])
+                JuMP.fix(p_sdd[uid, i], p_su[uid][i], force = true)
+            end
+            if Bool(in_sdpc[uid][i])
+                JuMP.fix(p_sdd[uid, i], p_sd[uid][i], force = true)
+            end
+            if !(Bool(in_supc[uid][i]) || Bool(in_sdpc[uid][i]) || Bool(on_status[uid, i]))
+                # If we're not online or in a power curve, fix power to zero
+                JuMP.fix(p_sdd[uid, i], 0.0, force = true)
+            end
+        end
+    end
+
+    # This function should be used if we have distinct variables for p_on/su/sd
+    #add_on_su_sd_implication_constraints!(model, data; include_reserves=false,
+    #    p_on=mock_p_on, u_on=on_status, p_su=mock_p_su, p_sd=mock_p_sd,
+    #)
+    # We implement our own implication constraints here, as we only need a subset
+    # of those from the scheduling_model
+    online_device_periods = [(uid, i) for uid in sdd_ids for i in periods if Bool(on_status[uid, i])]
+    p_on_implication = @constraint(model, [(uid, i) in online_device_periods],
+        sdd_ts_lookup[uid]["p_lb"][i] * on_status[uid, i]
+        <= p_sdd[uid, i]
+        <= sdd_ts_lookup[uid]["p_ub"][i] * on_status[uid, i]
+    )
+
+    add_reactive_power_implication_constraints!(model, data, T_su_pc, T_sd_pc;
+        include_reserves=false, q=q_sdd, u_on=on_status, u_su=u_su, u_sd=u_sd,
+    )
+
+    # TODO: Integer domain and explicitly relax?
+    @variable(
+        model,
+        shunt_lookup[uid]["step_lb"]
+        <= shunt_step[uid in shunt_ids, i in periods]
+        <= shunt_lookup[uid]["step_ub"]
+    )
+    if fix_shunt_steps
+        for uid in shunt_ids
+            init_step = shunt_lookup[uid]["initial_status"]["step"]
+            JuMP.fix.(shunt_step[uid, :], init_step, force = true)
+        end
+    end
+
+    # Add slack variables for power balance relaxation (which we usually use)
+    if relax_p_balance
+        if max_balance_violation !== nothing
+            p_balance_slack_pos = @variable(
+                model,
+                0 <= p_balance_slack_pos[bus_ids, periods] <= max_balance_violation,
+            )
+            p_balance_slack_neg = @variable(
+                model,
+                0 <= p_balance_slack_neg[bus_ids, periods] <= max_balance_violation,
+            )
+        else
+            p_balance_slack_pos = @variable(model, 0 <= p_balance_slack_pos[bus_ids, periods])
+            p_balance_slack_neg = @variable(model, 0 <= p_balance_slack_neg[bus_ids, periods])
+        end
+        p_balance_penalty = violation_cost["p_bus_vio_cost"]
+    end
+    if relax_q_balance
+        if max_balance_violation !== nothing
+            q_balance_slack_pos = @variable(
+                model,
+                0 <= q_balance_slack_pos[bus_ids, periods] <= max_balance_violation,
+            )
+            q_balance_slack_neg = @variable(
+                model,
+                0 <= q_balance_slack_neg[bus_ids, periods] <= max_balance_violation,
+            )
+        else
+            q_balance_slack_pos = @variable(model, 0 <= q_balance_slack_pos[bus_ids, periods])
+            q_balance_slack_neg = @variable(model, 0 <= q_balance_slack_neg[bus_ids, periods])
+        end
+        q_balance_penalty = violation_cost["q_bus_vio_cost"]
+    end
+
+    for (uid, bus) in bus_lookup
+        @constraint(model, [i in periods], va[uid, i] == 0.0)
+        break
+    end
+
+    # Implement piecewise-linear cost functions
+    device_cost = Dict()
+    for uid in sdd_ids
+        for t in periods
+            cost_blocks = sdd_ts_lookup[uid]["cost"][t]
+            cost_block_p = @variable(model,
+                [i in 1:length(cost_blocks)],
+                lower_bound = 0.0,
+                upper_bound = cost_blocks[i][2]
+            )
+            device_cost[uid, t] = @expression(model,
+                sum(
+                    cb[1]*cost_block_p[i] for (i, cb) in enumerate(cost_blocks),
+                    init = 0
+                )
+            )
+            JuMP.@constraint(model, p_sdd[uid, t] == sum(cost_block_p, init = 0))
+        end
+    end
+
+    # Create penalty terms for power balance violations
+    if relax_p_balance
+        p_balance_penalty_term = @expression(model,
+            [i in periods],
+            p_balance_penalty*sum(
+                p_balance_slack_pos[uid, i] + p_balance_slack_neg[uid, i]
+                for uid in bus_ids,
+                init = 0
+            )
+        )
+    else
+        p_balance_penalty_term = 0.0
+    end
+    if relax_q_balance
+        q_balance_penalty_term = @expression(model,
+            [i in periods],
+            q_balance_penalty*sum(
+                q_balance_slack_pos[uid, i] + q_balance_slack_neg[uid, i]
+                for uid in bus_ids,
+                init = 0
+            )
+        )
+    else
+        q_balance_penalty_term = 0.0
+    end
+    # TODO: Thermal limit penalty expressions?
+    # (Only if I allow relaxing these constraints.)
+
+    @objective(model, Max, sum(
+        dt[t] * (
+            sum(device_cost[uid, t] for uid in sdd_ids_consumer, init = 0)
+            - sum(device_cost[uid, t] for uid in sdd_ids_producer, init = 0)
+            - p_balance_penalty_term[t]
+            - q_balance_penalty_term[t]
+        ) for t in periods
+    ))
+
+    # Constraints
+    # Note that we don't include max-energy-over-interval constraints/penalties,
+    # although they could be relevant here.
+
+    if relax_p_balance
+        @NLconstraint(model,
+            p_balance[uid in bus_ids, i in periods],
+            sum(p_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
+            sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
+            sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_consumer_ids[uid], init = 0) -
+            sum(
+                shunt_lookup[shunt_id]["gs"]*shunt_step[shunt_id, i]
+                for shunt_id in bus_shunt_ids[uid],
+                init = 0
+            )*vm[uid, i]^2
+            #gs*vm[uid]^2
+            # Add positive and negative slack variables
+            + (p_balance_slack_pos[uid, i] - p_balance_slack_neg[uid, i])
+        )
+    else
+        @NLconstraint(model,
+            p_balance[uid in bus_ids, i in periods],
+            sum(p_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
+            sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
+            sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_consumer_ids[uid], init = 0) -
+            sum(
+                shunt_lookup[shunt_id]["gs"]*shunt_step[shunt_id, i]
+                for shunt_id in bus_shunt_ids[uid],
+                init = 0
+            )*vm[uid, i]^2
+            #gs*vm[uid]^2
+        )
+    end
+    if relax_q_balance
+        @NLconstraint(model,
+            q_balance[uid in bus_ids, i in periods],
+            sum(q_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
+            sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
+            sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_consumer_ids[uid], init = 0) +
+            sum(
+                shunt_lookup[shunt_id]["bs"]*shunt_step[shunt_id, i]
+                for shunt_id in bus_shunt_ids[uid],
+                init = 0
+            )*vm[uid, i]^2
+            #bs*vm[uid]^2
+            # Add positive and negative slack variables
+            + (q_balance_slack_pos[uid, i] - q_balance_slack_neg[uid, i])
+        )
+    else
+        @NLconstraint(model, 
+            q_balance[uid in bus_ids, i in periods],
+            sum(q_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
+            sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
+            sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_consumer_ids[uid], init = 0) +
+            sum(
+                shunt_lookup[shunt_id]["bs"]*shunt_step[shunt_id, i]
+                for shunt_id in bus_shunt_ids[uid],
+                init = 0
+            )*vm[uid, i]^2
+            #bs*vm[uid]^2
+        )
+    end
+
+    for (uid,ac_line) in ac_line_lookup, i in periods
+        branch = ac_line
+        fr_key = (uid, branch["fr_bus"], branch["to_bus"])
+        to_key = (uid, branch["to_bus"], branch["fr_bus"])
+
+        p_fr = p_branch[fr_key, i]
+        q_fr = q_branch[fr_key, i]
+        p_to = p_branch[to_key, i]
+        q_to = q_branch[to_key, i]
+
+        #if relax_thermal_limits
+        #    s_thermal = ac_thermal_slack[uid]
+        #else
+        #    s_thermal = 0.0
+        #end
+
+        vm_fr = vm[branch["fr_bus"], i]
+        vm_to = vm[branch["to_bus"], i]
+        va_fr = va[branch["fr_bus"], i]
+        va_to = va[branch["to_bus"], i]
+
+        r = branch["r"]
+        x = branch["x"]
+        y = 1 / (r + im*x)
+        g = real(y)
+        b = imag(y)
+
+        tm = 1.0
+        ta = 0.0
+        tr = tm * cos(ta)
+        ti = tm * sin(ta)
+        ttm = tm^2
+
+        g_fr = 0.0
+        b_fr = branch["b"]/2.0
+        g_to = 0.0
+        b_to = branch["b"]/2.0
+
+        if branch["additional_shunt"] == 1
+            g_fr += branch["g_fr"]
+            b_fr += branch["b_fr"]
+            g_to += branch["g_to"]
+            b_to += branch["b_to"]
+        end
+
+        # variable bounds
+        JuMP.set_lower_bound(p_fr, -10.0*branch["mva_ub_nom"])
+        JuMP.set_lower_bound(q_fr, -10.0*branch["mva_ub_nom"])
+        JuMP.set_lower_bound(p_to, -10.0*branch["mva_ub_nom"])
+        JuMP.set_lower_bound(q_to, -10.0*branch["mva_ub_nom"])
+
+        JuMP.set_upper_bound(p_fr,  10.0*branch["mva_ub_nom"])
+        JuMP.set_upper_bound(q_fr,  10.0*branch["mva_ub_nom"])
+        JuMP.set_upper_bound(p_to,  10.0*branch["mva_ub_nom"])
+        JuMP.set_upper_bound(q_to,  10.0*branch["mva_ub_nom"])
+
+        # From side of the branch flow
+        JuMP.@NLconstraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@NLconstraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+
+        # To side of the branch flow
+        JuMP.@NLconstraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@NLconstraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+
+        # Voltage angle difference limit
+        JuMP.@constraint(model, vad_lb <= va_fr - va_to <= vad_ub)
+
+        # Apparent power limit, from side and to side
+        # TODO: What is the best way to formulate this as a soft constraint?
+        # Square root? Or (s_max + slack)^2?
+        # TODO: Potentially re-add option to relax
+        JuMP.@constraint(model, p_fr^2 + q_fr^2 <= (branch["mva_ub_nom"])^2)
+        JuMP.@constraint(model, p_to^2 + q_to^2 <= (branch["mva_ub_nom"])^2)
+    end
+
+    for (uid,twt) in twt_lookup, i in periods
+        branch = twt
+        fr_key = (uid, branch["fr_bus"], branch["to_bus"])
+        to_key = (uid, branch["to_bus"], branch["fr_bus"])
+
+        p_fr = p_branch[fr_key, i]
+        q_fr = q_branch[fr_key, i]
+        p_to = p_branch[to_key, i]
+        q_to = q_branch[to_key, i]
+
+        #if relax_thermal_limits
+        #    s_thermal = twt_thermal_slack[uid]
+        #else
+        #    s_thermal = 0.0
+        #end
+
+        vm_fr = vm[branch["fr_bus"], i]
+        vm_to = vm[branch["to_bus"], i]
+        va_fr = va[branch["fr_bus"], i]
+        va_to = va[branch["to_bus"], i]
+
+        r = branch["r"]
+        x = branch["x"]
+        y = 1 / (r + im*x)
+        g = real(y)
+        b = imag(y)
+
+        initial_status = branch["initial_status"]
+
+        tm = initial_status["tm"]
+        ta = initial_status["ta"]
+        tr = tm * cos(ta)
+        ti = tm * sin(ta)
+        ttm = tm^2
+
+        g_fr = 0.0
+        b_fr = branch["b"]/2.0
+        g_to = 0.0
+        b_to = branch["b"]/2.0
+
+        if branch["additional_shunt"] == 1
+            g_fr += branch["g_fr"]
+            b_fr += branch["b_fr"]
+            g_to += branch["g_to"]
+            b_to += branch["b_to"]
+        end
+
+        # variable bounds
+        JuMP.set_lower_bound(p_fr, -10.0*branch["mva_ub_nom"])
+        JuMP.set_lower_bound(q_fr, -10.0*branch["mva_ub_nom"])
+        JuMP.set_lower_bound(p_to, -10.0*branch["mva_ub_nom"])
+        JuMP.set_lower_bound(q_to, -10.0*branch["mva_ub_nom"])
+
+        JuMP.set_upper_bound(p_fr,  10.0*branch["mva_ub_nom"])
+        JuMP.set_upper_bound(q_fr,  10.0*branch["mva_ub_nom"])
+        JuMP.set_upper_bound(p_to,  10.0*branch["mva_ub_nom"])
+        JuMP.set_upper_bound(q_to,  10.0*branch["mva_ub_nom"])
+
+        # From side of the branch flow
+        JuMP.@NLconstraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@NLconstraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+
+        # To side of the branch flow
+        JuMP.@NLconstraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@NLconstraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+
+        # Voltage angle difference limit
+        JuMP.@constraint(model, vad_lb <= va_fr - va_to <= vad_ub)
+
+        # Apparent power limit, from side and to side
+        JuMP.@constraint(model, p_fr^2 + q_fr^2 <= (branch["mva_ub_nom"])^2)
+        JuMP.@constraint(model, p_to^2 + q_to^2 <= (branch["mva_ub_nom"])^2)
+    end
+
+    for (uid,dc_line) in dc_line_lookup, i in periods
+        branch = dc_line
+        fr_key = (uid, branch["fr_bus"], branch["to_bus"])
+        to_key = (uid, branch["to_bus"], branch["fr_bus"])
+
+        p_fr = p_branch[fr_key, i]
+        q_fr = q_branch[fr_key, i]
+        p_to = p_branch[to_key, i]
+        q_to = q_branch[to_key, i]
+
+        dc_line["pminf"] = -dc_line["pdc_ub"]
+        dc_line["pmaxf"] = dc_line["pdc_ub"]
+        dc_line["pmint"] = -dc_line["pdc_ub"]
+        dc_line["pmaxt"] = dc_line["pdc_ub"]
+
+        dc_line["qminf"] = dc_line["qdc_fr_lb"]
+        dc_line["qmaxf"] = dc_line["qdc_fr_ub"]
+        dc_line["qmint"] = dc_line["qdc_to_lb"]
+        dc_line["qmaxt"] = dc_line["qdc_to_ub"]
+
+        # variable bounds
+        JuMP.set_lower_bound(p_fr, -branch["pdc_ub"])
+        JuMP.set_lower_bound(q_fr,  branch["qdc_fr_lb"])
+        JuMP.set_lower_bound(p_to, -branch["pdc_ub"])
+        JuMP.set_lower_bound(q_to,  branch["qdc_to_lb"])
+
+        JuMP.set_upper_bound(p_fr, branch["pdc_ub"])
+        JuMP.set_upper_bound(q_fr, branch["qdc_fr_ub"])
+        JuMP.set_upper_bound(p_to, branch["pdc_ub"])
+        JuMP.set_upper_bound(q_to, branch["qdc_to_ub"])
+
+        # From side of the branch flow
+        JuMP.@constraint(model, p_fr + p_to == 0.0)
+    end
+
+    # Add ramping constraints
+    add_ramp_constraints!(model, sdd_lookup, periods, sdd_ids, dt;
+        p=p_sdd, u_on=on_status, u_su=u_su, u_sd=u_sd,
+    )
+
+    return model
+end
+
+
 function extract_data_from_model(
     model::JuMP.Model, input_data::NamedTuple, on_status::Dict, p::Dict;
     tolerance = 1e-6,
@@ -1084,6 +1611,121 @@ function extract_data_from_model(
     opf_solution[dc_key] = dc_map
 
     return opf_solution
+end
+
+"""Extract data from solution to multiperiod model
+
+on_status is required so we can distinguish between p_on and p_su/sd.
+    It should map uids to an arrays of binary values.
+
+"""
+function extract_data_from_multiperiod_model(
+    model, 
+    data,
+    on_status,
+)
+    solution_data = Dict{String, Any}()
+
+    #
+    # Add solution data for buses
+    #
+    bus_key = "bus"
+    bus_map = Dict{String, Dict}()
+    for uid in data.bus_ids
+        bus_uid_map = Dict{String, Any}()
+        bus_uid_map["vm"] = Vector(JuMP.value.(model[:vm][uid, :]))
+        bus_uid_map["va"] = Vector(JuMP.value.(model[:va][uid, :]))
+        # TODO: Extract duals in solution data if requested
+        #if model_has_duals
+        #    # Need names for these constraints
+        #    bus_uid_map["p_balance_dual"] = JuMP.dual(model[:p_balance][uid])
+        #    bus_uid_map["q_balance_dual"] = JuMP.dual(model[:q_balance][uid])
+        #end
+        bus_map[uid] = bus_uid_map
+    end
+    solution_data[bus_key] = bus_map
+
+    #
+    # Add solution data for shunts
+    #
+    shunt_key = "shunt"
+    shunt_map = Dict{String, Any}()
+    for uid in data.shunt_ids
+        shunt_uid_map = Dict{String, Any}(
+            #"step" => data.shunt_lookup[uid]["initial_status"]["step"],
+            "step" => Vector(JuMP.value.(model[:shunt_step][uid, :])),
+        )
+        shunt_map[uid] = shunt_uid_map
+    end
+    solution_data[shunt_key] = shunt_map
+
+    #
+    # Add solution data for SDDs
+    #
+    sdd_key = "simple_dispatchable_device"
+    sdd_map = Dict{String, Any}()
+    for uid in data.sdd_ids
+        sdd_uid_map = Dict{String, Any}(
+            # Just use the on status that was provided
+            # Probably don't even need to include on_status in this dict.
+            "on_status" => on_status[uid],
+            "p_on" => [0.0 for _ in data.periods],
+            "q" => Vector(JuMP.value.(model[:q_sdd][uid, :])),
+        )
+        for i in data.periods
+            if Bool(on_status[uid][i])
+                sdd_uid_map["p_on"][i] = JuMP.value(model[:p_sdd][uid, i])
+            end
+        end
+        sdd_map[uid] = sdd_uid_map
+    end
+    solution_data[sdd_key] = sdd_map
+
+    #
+    # Add solution data for AC lines
+    #
+    ac_key = "ac_line"
+    ac_map = Dict{String, Any}()
+    for uid in data.ac_line_ids
+        # TODO: Potentially support !allow_switching?
+        ac_map[uid] = Dict{String, Any}(
+            "on_status" => [1 for _ in data.periods],
+        )
+    end
+    solution_data[ac_key] = ac_map
+
+    #
+    # Add solution data for TWT
+    #
+    twt_key = "two_winding_transformer"
+    twt_map = Dict{String, Any}()
+    for uid in data.twt_ids
+        # TODO: Potentially support !allow_switching
+        twt_map[uid] = Dict(
+            "tm" => [data.twt_lookup[uid]["initial_status"]["tm"] for _ in data.periods],
+            "ta" => [data.twt_lookup[uid]["initial_status"]["ta"] for _ in data.periods],
+            "on_status" => [1 for _ in data.periods],
+        )
+    end
+    solution_data[twt_key] = twt_map
+
+    #
+    # Add solution data for DC lines
+    #
+    dc_key = "dc_line"
+    dc_map = Dict{String, Any}()
+    for uid in data.dc_line_ids
+        fr_bus = data.dc_line_lookup[uid]["fr_bus"]
+        to_bus = data.dc_line_lookup[uid]["to_bus"]
+        dc_uid_map = Dict{String, Any}()
+        dc_uid_map["pdc_fr"] = Vector(JuMP.value.(model[:p_branch][(uid, fr_bus, to_bus), :]))
+        dc_uid_map["qdc_fr"] = Vector(JuMP.value.(model[:q_branch][(uid, fr_bus, to_bus), :]))
+        dc_uid_map["qdc_to"] = Vector(JuMP.value.(model[:q_branch][(uid, to_bus, fr_bus), :]))
+        dc_map[uid] = dc_uid_map
+    end
+    solution_data[dc_key] = dc_map
+
+    return solution_data
 end
 
 function compute_line_capacity_ub(input_data, branch_id, frbus_id, tobus_id)

@@ -548,3 +548,55 @@ function compute_opf_in_parallel(
 
     return acopf_solutions
 end
+
+function compute_multiperiod_opf(
+    data,
+    on_status;
+    optimizer = nothing,
+    ipopt_linear_solver = nothing,
+    return_model = true,
+)
+    if optimizer === nothing
+        if ipopt_linear_solver === nothing
+            # linear solver was not specified. We defer selection
+            # of the default to Ipopt
+            optimizer = JuMP.optimizer_with_attributes(
+                Ipopt.Optimizer,
+                "honor_original_bounds" => "yes",
+                "tol" => 1e-6,
+                "acceptable_tol" => 1e-4,
+            )
+        else
+            # Use the linear solver specified
+            optimizer = JuMP.optimizer_with_attributes(
+                Ipopt.Optimizer,
+                "honor_original_bounds" => "yes",
+                "acceptable_tol" => 1e-4,
+                "linear_solver" => ipopt_linear_solver,
+            )
+        end
+    end
+    args = Dict(
+        "on_status" => on_status,
+        # TODO: Allow an option to relax, round, and re-solve shunt steps
+        "fix_shunt_steps" => true,
+    )
+    model = get_multiperiod_acopf_model(data, args=args)
+
+    JuMP.set_optimizer(model, optimizer)
+    MOI.set(model, Ipopt.CallbackFunction(), ipopt_acceptable_callback)
+    JuMP.optimize!(
+        model,
+        _differentiation_backend = MathOptSymbolicAD.DefaultBackend(),
+    )
+    output_data = extract_data_from_multiperiod_model(
+        model,
+        data,
+        on_status,
+    )
+    if return_model
+        return model, output_data
+    else
+        return nothing, output_data
+    end
+end

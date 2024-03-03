@@ -117,6 +117,7 @@ function run_ac_uc_solver(args::Dict)
     fix_ac_real_power = get(args, "fix_ac_real_power", false)
     sequential_opf = get(args, "sequential_opf", true)
     parallel_opf = get(args, "parallel_opf", false)
+    multiperiod_opf = get(args, "multiperiod_opf", false)
     # This is only used if parallel_opf is true
     post_parallel_sequential = get(args, "post_parallel_sequential", true)
     if sequential_opf && parallel_opf
@@ -418,7 +419,37 @@ function run_ac_uc_solver(args::Dict)
                 sdd_to_ub = sdd_to_ub,
             )
         end
+    elseif multiperiod_opf
+        if fix_ac_real_power
+            throw(ArgumentError("multiperiod_opf cannot be used with fix_ac_real_power"))
+        end
+        if resolve_rounded_shunts
+            throw(ArgumentError("multiperiod_opf does not support re-solving shunts yet"))
+        end
+        if relax_thermal_limits
+            throw(ArgumentError("multiperiod_opf does not support relax_thermal_limits"))
+        end
+        _, mpacopf_solution = compute_multiperiod_opf(
+            processed_data,
+            on_status;
+            optimizer = nlp_optimizer,
+            ipopt_linear_solver = linear_solver,
+            return_model = false,
+        )
+        # Reshape the solution data for consistency with other subroutines
+        acopf_solutions = [
+            (nothing, Dict(
+                key => Dict(
+                    uid => Dict(
+                        attr => device[attr][i] for attr in keys(device)
+                    ) for (uid, device) in devicedict
+                ) for (key, devicedict) in mpacopf_solution
+            )) for i in periods
+        ]
     else
+        # This is a non-parallel default. It can solve OPF subproblems
+        # independently or sequentially. This is controlled by the sequential_opf
+        # option.
         acopf_solutions = compute_optimal_power_flows(
             processed_data,
             on_status,
@@ -492,7 +523,7 @@ function run_ac_uc_solver(args::Dict)
         schedule_data;
         opf_data = acopf_solve_data,
         write_duals = write_duals,
-        include_reserves = true,
+        include_reserves = false,
         postprocess = postprocess_final_solution,
         print_projected_devices = print_projected_devices,
     )
