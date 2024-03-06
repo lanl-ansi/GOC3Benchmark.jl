@@ -78,6 +78,7 @@ function run_ac_uc_solver(args::Dict)
     if simultaneous_acuc && minlp_optimizer === nothing
         throw(ArgumentError("minlp_optimizer must be provided if simultaneous_acuc is used"))
     end
+    include_reserves_in_solution = get(args, "include_reserves_in_solution", true)
 
     #
     # Options for MIP solve
@@ -575,7 +576,7 @@ function run_ac_uc_solver(args::Dict)
         schedule_data;
         opf_data = acopf_solve_data,
         write_duals = write_duals,
-        include_reserves = true,
+        include_reserves = include_reserves_in_solution,
         postprocess = postprocess_final_solution,
         print_projected_devices = print_projected_devices,
     )
