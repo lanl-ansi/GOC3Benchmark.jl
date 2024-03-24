@@ -72,6 +72,14 @@ function run_ac_uc_solver(args::Dict)
     print_projected_devices = get(args, "print_projected_devices", true)
     print_violated_qbalance = get(args, "print_violated_qbalance", false)
 
+    simultaneous_acuc = get(args, "simultaneous_acuc", false)
+    include_reserves_in_acuc = get(args, "include_reserves_in_acuc", false)
+    minlp_optimizer = get(args, "minlp_optimizer", nothing)
+    if simultaneous_acuc && minlp_optimizer === nothing
+        throw(ArgumentError("minlp_optimizer must be provided if simultaneous_acuc is used"))
+    end
+    include_reserves_in_solution = get(args, "include_reserves_in_solution", true)
+
     #
     # Options for MIP solve
     #
@@ -179,262 +187,38 @@ function run_ac_uc_solver(args::Dict)
 
     timing_data["load_initial_data"] = time() - start_time
 
-    time_mip_start = time()
-
-    if warmstart_mip
-        # Note that this simply copies initial status and does not solve
-        # a MIP
-        naive_schedule = schedule_to_initial_point(input_data)
-    else
-        naive_schedule = nothing
-    end
-
-    if schedule_independently
-        model, schedule_data = schedule_power_independently(
-            input_data;
-            optimizer = mip_optimizer,
-            relax_integrality = relax_integrality,
-            time_limit = scheduler_time_limit,
-            include_reserves = include_reserves_in_schedule,
-            warmstart_data = naive_schedule,
-        )
-    elseif schedule_close_to_initial
-        model, schedule_data = schedule_close_to_initial_point(
-            input_data;
-            optimizer = mip_optimizer,
-            relax_integrality = relax_integrality,
-            time_limit = scheduler_time_limit,
-        )
-    else
-        # If we were not told to schedule independently, we schedule
-        # with a 2-step procedure, where we first try with a strict
-        # copper-plate balance, then with a relaxed copperplate balance
-        # with penalized violation.
-        #
-        # Determine a valid generation/consumption schedule assuming a
-        # copper-plate grid
-        #
-        model, schedule_data = schedule_power_copperplate(
-            input_data;
-            optimizer = mip_optimizer,
-            relax_integrality = relax_integrality,
-            time_limit = scheduler_time_limit,
-            relax_balances = relax_copperplate_balances,
-            include_reserves = include_reserves_in_schedule,
-            warmstart_data = naive_schedule,
-            overcommitment_factor = overcommitment_factor,
-        )
-        if schedule_data === nothing && !relax_copperplate_balances
-            # If we can't find a feasible solution within the time limit, AND
-            # we did not already relax the copperplate balances, relax the
-            # copperplate balances and try again.
-            # We may need to provide or determine a different time limit for this
-            # solve.
-            model, schedule_data = schedule_power_copperplate(
-                input_data;
-                optimizer = mip_optimizer,
-                relax_integrality = relax_integrality,
-                time_limit = scheduler_time_limit,
-                relax_balances = true,
-                include_reserves = include_reserves_in_schedule,
-                warmstart_data = naive_schedule,
-                overcommitment_factor = overcommitment_factor,
-            )
-        end
-    end
-    if schedule_data === nothing
-        # If the scheduling procedure above (independent or otherwise) fails,
-        # we simply copy scheduling decisions from the initial point to try and
-        # write *some* solution file.
-        schedule_data = schedule_to_initial_point(input_data)
-    end
-    pr_status = primal_status(model)
-    feasible_schedule = (pr_status == FEASIBLE_POINT)
-
-    if feasible_schedule
-        solve_data["feasible"] = true
-        solve_data["objective_value"] = objective_value(model)
-    else
-        solve_data["feasible"] = false
-        if halt_on_infeasible_schedule
-            # TODO: Find a place for this useful code
-            #compute_conflict!(model)
-            #println("Constraints in conflict:")
-            #for con in all_constraints(model, include_variable_in_set_constraints=true)
-            #    status = MOI.get(model, MOI.ConstraintConflictStatus(), con)
-            #    if status == MOI.IN_CONFLICT
-            #        println(con)
-            #    end
-            #end
-            return solve_data
-        end
-    end
-
-    # All the conditions required for schedule_data to have reserves
-    if (
-        include_reserves_in_schedule
-        && feasible_schedule
-        && !schedule_close_to_initial
-        && sdd_fraction_to_constrain > 0.0
-    )
-        pos_reserve_value, neg_reserve_value = compute_device_reserve_values(input_data, schedule_data)
-
-        topo_data = preprocess_topology_data(input_data)
-        sdd2bus = Dict()
-        for bus_id in input_data.bus_ids
-            for sdd_id in topo_data.bus_sdd_ids[bus_id]
-                sdd2bus[sdd_id] = bus_id
-            end
-        end
-        has_shunt = Dict(uid => (length(topo_data.bus_shunt_ids[sdd2bus[uid]]) >= 1) for uid in input_data.sdd_ids)
-
-        println("Computing costs for fixing devices")
-        # Estimate of (local) power balance violation penalty we will take by
-        # *preventing the device from decreasing*
-        balance_costs = compute_device_balance_costs(input_data, schedule_data, allow_switching = allow_switching)
-        println("Done computing costs")
-
-        net_value_for_lb = Dict(uid => (neg_reserve_value[uid] - balance_costs[uid]) for uid in input_data.sdd_ids)
-        net_value_for_ub = Dict(uid => (pos_reserve_value[uid] - balance_costs[uid]) for uid in input_data.sdd_ids)
-
-        sdd_by_ub_value = sort(input_data.sdd_ids, by = uid -> net_value_for_ub[uid], rev = true)
-        sdd_by_lb_value = sort(input_data.sdd_ids, by = uid -> net_value_for_lb[uid], rev = true)
-        sdd_by_ub_pos = [uid for uid in sdd_by_ub_value if net_value_for_ub[uid] > 0 && balance_costs[uid] == 0 && !has_shunt[uid]]
-        sdd_by_lb_pos = [uid for uid in sdd_by_lb_value if net_value_for_lb[uid] > 0 && balance_costs[uid] == 0 && !has_shunt[uid]]
-
-        n_to_ub = Int64(round(sdd_fraction_to_constrain * length(sdd_by_ub_pos)))
-        n_to_lb = Int64(round(sdd_fraction_to_constrain * length(sdd_by_lb_pos)))
-
-        sdd_to_ub = sdd_by_ub_pos[1:n_to_ub]
-        sdd_to_lb = sdd_by_lb_pos[1:n_to_lb]
-
-        println("SDD TO BE UPPER BOUNDED THROUGHOUT OPF SOLVES")
-        println("---------------------------------------------")
-        for (i, uid) in enumerate(sdd_to_ub)
-            println("$i: uid=$uid, reserve value = $(pos_reserve_value[uid]), balance cost = $(balance_costs[uid]), net value = $(net_value_for_ub[uid])")
-        end
-        println("---------------------------------------------")
-        println("SDD TO BE LOWER BOUNDED THROUGHOUT OPF SOLVES")
-        println("---------------------------------------------")
-        for (i, uid) in enumerate(sdd_to_lb)
-            println("$i: uid=$uid, reserve value = $(neg_reserve_value[uid]), balance cost = $(balance_costs[uid]), net value = $(net_value_for_lb[uid])")
-        end
-        println("---------------------------------------------")
-    else
-        sdd_to_ub = []
-        sdd_to_lb = []
-    end
-
-    timing_data["schedule_total"] = time() - time_mip_start
-
-    time_opf_start = time()
-
-    on_status = schedule_data.on_status
-    real_power = schedule_data.real_power
-
-    if tighten_bounds_pre_opf && feasible_schedule
-        # Only tighten bounds if we have a feasible schedule. Otherwise bounds
-        # can cross, and we don't handle that case here.
-        processed_data = tighten_bounds_using_ramp_limits(
-            input_data, on_status, real_power
-        )
-    else
-        processed_data = input_data
-    end
-
-    #
-    # Solve ACOPF problem for every time period
-    #
-    if parallel_opf
-        # First, compute in parallel
-        acopf_solutions = compute_opf_in_parallel(
-            processed_data,
-            on_status,
-            real_power;
-            optimizer = nlp_optimizer,
-            ipopt_linear_solver = linear_solver,
-            fix_real_power = fix_ac_real_power,
-            penalize_power_deviation = true,
-            allow_switching = allow_switching,
-            resolve_rounded_shunts = resolve_rounded_shunts,
-            fix_shunt_steps = !resolve_rounded_shunts,
-            relax_thermal_limits = relax_thermal_limits,
-            sdd_to_lb = sdd_to_lb,
-            sdd_to_ub = sdd_to_ub,
-        )
-
-        acopf_solve_data = [data for (_, data) in acopf_solutions]
-        #
-        # Construct serializable solution data structure
-        #
-        solfile_dict = construct_solution_dict(
-            input_data,
-            schedule_data;
-            opf_data = acopf_solve_data,
-            write_duals = write_duals,
-            include_reserves = true,
-            # We need postprocessing after the parallel solves to make sure that
-            # ramping constraints are satisfied.
-            #
-            # TODO: Why is postprocessing combined with construction of the
-            # solution data structure? Just to make this function simpler?
-            postprocess = true,
-            print_projected_devices = print_projected_devices,
-        )
-
-        #
-        # Write out solution file
-        #
-        if "solution_file" in keys(args)
-            solution_fpath = args["solution_file"]
-            # Defer making the solution file directory until now so that we hopefully
-            # only make this directory if we are going to put something in it.
-            mkpath(dirname(solution_fpath))
-            open(io -> JSON.print(io, solfile_dict, 4), solution_fpath, "w")
-            println("Wrote solution file at $(time() - start_time) s")
-            println("(after start of run_ac_uc_solver)")
-        end
-
-        #
-        # Now, if we used a parallel, fully-independent solve previously, we
-        # re-solve with sequential OPF solves to try to achieve a better solution
-        # than the solve-independently-and-project solution gives us.
-        #
-        if post_parallel_sequential
-            acopf_solutions = compute_optimal_power_flows(
-                processed_data,
-                on_status,
-                real_power;
-                # In this post-parallel solve, we always solve sequentially.
-                sequential = true,
-                optimizer = nlp_optimizer,
-                ipopt_linear_solver = linear_solver,
-                fix_real_power = fix_ac_real_power,
-                penalize_power_deviation = true,
-                allow_switching = allow_switching,
-                resolve_rounded_shunts = resolve_rounded_shunts,
-                fix_shunt_steps = !resolve_rounded_shunts,
-                relax_thermal_limits = relax_thermal_limits,
-                sdd_to_lb = sdd_to_lb,
-                sdd_to_ub = sdd_to_ub,
-            )
-        end
-    elseif multiperiod_opf
+    if simultaneous_acuc
         if fix_ac_real_power
-            throw(ArgumentError("multiperiod_opf cannot be used with fix_ac_real_power"))
+            throw(ArgumentError("simultaneous_acuc cannot be used with fix_ac_real_power"))
         end
         if resolve_rounded_shunts
-            throw(ArgumentError("multiperiod_opf does not support re-solving shunts yet"))
+            throw(ArgumentError("simultaneous_acuc does not support re-solving shunts yet"))
         end
         if relax_thermal_limits
-            throw(ArgumentError("multiperiod_opf does not support relax_thermal_limits"))
+            throw(ArgumentError("simultaneous_acuc does not support relax_thermal_limits"))
         end
-        _, mpacopf_solution = compute_multiperiod_opf(
-            processed_data,
-            on_status;
-            optimizer = nlp_optimizer,
-            ipopt_linear_solver = linear_solver,
-            return_model = false,
+        acuc_model = get_ac_uc_model(
+            input_data,
+            include_reserves=include_reserves_in_acuc,
+        )
+        JuMP.set_optimizer(acuc_model, minlp_optimizer)
+        JuMP.optimize!(acuc_model)
+
+        # We can extract scheduling data easily as this model uses the same
+        # variable names as the full model
+        schedule_data = extract_data_from_scheduling_model(
+            input_data,
+            acuc_model,
+            include_reserves=include_reserves_in_acuc,
+        )
+        # We should be able to extract OPF data by simply overriding the default
+        # variable names used for p and q
+        mpacopf_solution = extract_data_from_multiperiod_model(
+            acuc_model,
+            input_data,
+            schedule_data.on_status,
+            p_sdd=acuc_model[:p],
+            q_sdd=acuc_model[:q],
         )
         # Reshape the solution data for consistency with other subroutines
         acopf_solutions = [
@@ -447,26 +231,297 @@ function run_ac_uc_solver(args::Dict)
             )) for i in periods
         ]
     else
-        # This is a non-parallel default. It can solve OPF subproblems
-        # independently or sequentially. This is controlled by the sequential_opf
-        # option.
-        acopf_solutions = compute_optimal_power_flows(
-            processed_data,
-            on_status,
-            real_power;
-            sequential = sequential_opf,
-            optimizer = nlp_optimizer,
-            ipopt_linear_solver = linear_solver,
-            fix_real_power = fix_ac_real_power,
-            penalize_power_deviation = true,
-            allow_switching = allow_switching,
-            resolve_rounded_shunts = resolve_rounded_shunts,
-            fix_shunt_steps = !resolve_rounded_shunts,
-            relax_thermal_limits = relax_thermal_limits,
-            sdd_to_lb = sdd_to_lb,
-            sdd_to_ub = sdd_to_ub,
+        time_mip_start = time()
+
+        if warmstart_mip
+            # Note that this simply copies initial status and does not solve
+            # a MIP
+            naive_schedule = schedule_to_initial_point(input_data)
+        else
+            naive_schedule = nothing
+        end
+
+        if schedule_independently
+            model, schedule_data = schedule_power_independently(
+                input_data;
+                optimizer = mip_optimizer,
+                relax_integrality = relax_integrality,
+                time_limit = scheduler_time_limit,
+                include_reserves = include_reserves_in_schedule,
+                warmstart_data = naive_schedule,
+            )
+        elseif schedule_close_to_initial
+            model, schedule_data = schedule_close_to_initial_point(
+                input_data;
+                optimizer = mip_optimizer,
+                relax_integrality = relax_integrality,
+                time_limit = scheduler_time_limit,
+            )
+        else
+            # If we were not told to schedule independently, we schedule
+            # with a 2-step procedure, where we first try with a strict
+            # copper-plate balance, then with a relaxed copperplate balance
+            # with penalized violation.
+            #
+            # Determine a valid generation/consumption schedule assuming a
+            # copper-plate grid
+            #
+            model, schedule_data = schedule_power_copperplate(
+                input_data;
+                optimizer = mip_optimizer,
+                relax_integrality = relax_integrality,
+                time_limit = scheduler_time_limit,
+                relax_balances = relax_copperplate_balances,
+                include_reserves = include_reserves_in_schedule,
+                warmstart_data = naive_schedule,
+                overcommitment_factor = overcommitment_factor,
+            )
+            if schedule_data === nothing && !relax_copperplate_balances
+                # If we can't find a feasible solution within the time limit, AND
+                # we did not already relax the copperplate balances, relax the
+                # copperplate balances and try again.
+                # We may need to provide or determine a different time limit for this
+                # solve.
+                model, schedule_data = schedule_power_copperplate(
+                    input_data;
+                    optimizer = mip_optimizer,
+                    relax_integrality = relax_integrality,
+                    time_limit = scheduler_time_limit,
+                    relax_balances = true,
+                    include_reserves = include_reserves_in_schedule,
+                    warmstart_data = naive_schedule,
+                    overcommitment_factor = overcommitment_factor,
+                )
+            end
+        end
+        if schedule_data === nothing
+            # If the scheduling procedure above (independent or otherwise) fails,
+            # we simply copy scheduling decisions from the initial point to try and
+            # write *some* solution file.
+            schedule_data = schedule_to_initial_point(input_data)
+        end
+        pr_status = primal_status(model)
+        feasible_schedule = (pr_status == FEASIBLE_POINT)
+
+        if feasible_schedule
+            solve_data["feasible"] = true
+            solve_data["objective_value"] = objective_value(model)
+        else
+            solve_data["feasible"] = false
+            if halt_on_infeasible_schedule
+                # TODO: Find a place for this useful code
+                #compute_conflict!(model)
+                #println("Constraints in conflict:")
+                #for con in all_constraints(model, include_variable_in_set_constraints=true)
+                #    status = MOI.get(model, MOI.ConstraintConflictStatus(), con)
+                #    if status == MOI.IN_CONFLICT
+                #        println(con)
+                #    end
+                #end
+                return solve_data
+            end
+        end
+
+        # All the conditions required for schedule_data to have reserves
+        if (
+            include_reserves_in_schedule
+            && feasible_schedule
+            && !schedule_close_to_initial
+            && sdd_fraction_to_constrain > 0.0
         )
-    end
+            pos_reserve_value, neg_reserve_value = compute_device_reserve_values(input_data, schedule_data)
+
+            topo_data = preprocess_topology_data(input_data)
+            sdd2bus = Dict()
+            for bus_id in input_data.bus_ids
+                for sdd_id in topo_data.bus_sdd_ids[bus_id]
+                    sdd2bus[sdd_id] = bus_id
+                end
+            end
+            has_shunt = Dict(uid => (length(topo_data.bus_shunt_ids[sdd2bus[uid]]) >= 1) for uid in input_data.sdd_ids)
+
+            println("Computing costs for fixing devices")
+            # Estimate of (local) power balance violation penalty we will take by
+            # *preventing the device from decreasing*
+            balance_costs = compute_device_balance_costs(input_data, schedule_data, allow_switching = allow_switching)
+            println("Done computing costs")
+
+            net_value_for_lb = Dict(uid => (neg_reserve_value[uid] - balance_costs[uid]) for uid in input_data.sdd_ids)
+            net_value_for_ub = Dict(uid => (pos_reserve_value[uid] - balance_costs[uid]) for uid in input_data.sdd_ids)
+
+            sdd_by_ub_value = sort(input_data.sdd_ids, by = uid -> net_value_for_ub[uid], rev = true)
+            sdd_by_lb_value = sort(input_data.sdd_ids, by = uid -> net_value_for_lb[uid], rev = true)
+            sdd_by_ub_pos = [uid for uid in sdd_by_ub_value if net_value_for_ub[uid] > 0 && balance_costs[uid] == 0 && !has_shunt[uid]]
+            sdd_by_lb_pos = [uid for uid in sdd_by_lb_value if net_value_for_lb[uid] > 0 && balance_costs[uid] == 0 && !has_shunt[uid]]
+
+            n_to_ub = Int64(round(sdd_fraction_to_constrain * length(sdd_by_ub_pos)))
+            n_to_lb = Int64(round(sdd_fraction_to_constrain * length(sdd_by_lb_pos)))
+
+            sdd_to_ub = sdd_by_ub_pos[1:n_to_ub]
+            sdd_to_lb = sdd_by_lb_pos[1:n_to_lb]
+
+            println("SDD TO BE UPPER BOUNDED THROUGHOUT OPF SOLVES")
+            println("---------------------------------------------")
+            for (i, uid) in enumerate(sdd_to_ub)
+                println("$i: uid=$uid, reserve value = $(pos_reserve_value[uid]), balance cost = $(balance_costs[uid]), net value = $(net_value_for_ub[uid])")
+            end
+            println("---------------------------------------------")
+            println("SDD TO BE LOWER BOUNDED THROUGHOUT OPF SOLVES")
+            println("---------------------------------------------")
+            for (i, uid) in enumerate(sdd_to_lb)
+                println("$i: uid=$uid, reserve value = $(neg_reserve_value[uid]), balance cost = $(balance_costs[uid]), net value = $(net_value_for_lb[uid])")
+            end
+            println("---------------------------------------------")
+        else
+            sdd_to_ub = []
+            sdd_to_lb = []
+        end
+
+        timing_data["schedule_total"] = time() - time_mip_start
+
+        time_opf_start = time()
+
+        on_status = schedule_data.on_status
+        real_power = schedule_data.real_power
+
+        if tighten_bounds_pre_opf && feasible_schedule
+            # Only tighten bounds if we have a feasible schedule. Otherwise bounds
+            # can cross, and we don't handle that case here.
+            processed_data = tighten_bounds_using_ramp_limits(
+                input_data, on_status, real_power
+            )
+        else
+            processed_data = input_data
+        end
+
+        #
+        # Solve ACOPF problem for every time period
+        #
+        if parallel_opf
+            # First, compute in parallel
+            acopf_solutions = compute_opf_in_parallel(
+                processed_data,
+                on_status,
+                real_power;
+                optimizer = nlp_optimizer,
+                ipopt_linear_solver = linear_solver,
+                fix_real_power = fix_ac_real_power,
+                penalize_power_deviation = true,
+                allow_switching = allow_switching,
+                resolve_rounded_shunts = resolve_rounded_shunts,
+                fix_shunt_steps = !resolve_rounded_shunts,
+                relax_thermal_limits = relax_thermal_limits,
+                sdd_to_lb = sdd_to_lb,
+                sdd_to_ub = sdd_to_ub,
+            )
+
+            acopf_solve_data = [data for (_, data) in acopf_solutions]
+            #
+            # Construct serializable solution data structure
+            #
+            solfile_dict = construct_solution_dict(
+                input_data,
+                schedule_data;
+                opf_data = acopf_solve_data,
+                write_duals = write_duals,
+                include_reserves = true,
+                # We need postprocessing after the parallel solves to make sure that
+                # ramping constraints are satisfied.
+                #
+                # TODO: Why is postprocessing combined with construction of the
+                # solution data structure? Just to make this function simpler?
+                postprocess = true,
+                print_projected_devices = print_projected_devices,
+            )
+
+            #
+            # Write out solution file
+            #
+            if "solution_file" in keys(args)
+                solution_fpath = args["solution_file"]
+                # Defer making the solution file directory until now so that we hopefully
+                # only make this directory if we are going to put something in it.
+                mkpath(dirname(solution_fpath))
+                open(io -> JSON.print(io, solfile_dict, 4), solution_fpath, "w")
+                println("Wrote solution file at $(time() - start_time) s")
+                println("(after start of run_ac_uc_solver)")
+            end
+
+            #
+            # Now, if we used a parallel, fully-independent solve previously, we
+            # re-solve with sequential OPF solves to try to achieve a better solution
+            # than the solve-independently-and-project solution gives us.
+            #
+            if post_parallel_sequential
+                acopf_solutions = compute_optimal_power_flows(
+                    processed_data,
+                    on_status,
+                    real_power;
+                    # In this post-parallel solve, we always solve sequentially.
+                    sequential = true,
+                    optimizer = nlp_optimizer,
+                    ipopt_linear_solver = linear_solver,
+                    fix_real_power = fix_ac_real_power,
+                    penalize_power_deviation = true,
+                    allow_switching = allow_switching,
+                    resolve_rounded_shunts = resolve_rounded_shunts,
+                    fix_shunt_steps = !resolve_rounded_shunts,
+                    relax_thermal_limits = relax_thermal_limits,
+                    sdd_to_lb = sdd_to_lb,
+                    sdd_to_ub = sdd_to_ub,
+                )
+            end
+        elseif multiperiod_opf
+            if fix_ac_real_power
+                throw(ArgumentError("multiperiod_opf cannot be used with fix_ac_real_power"))
+            end
+            if resolve_rounded_shunts
+                throw(ArgumentError("multiperiod_opf does not support re-solving shunts yet"))
+            end
+            if relax_thermal_limits
+                throw(ArgumentError("multiperiod_opf does not support relax_thermal_limits"))
+            end
+            _, mpacopf_solution = compute_multiperiod_opf(
+                processed_data,
+                on_status;
+                optimizer = nlp_optimizer,
+                ipopt_linear_solver = linear_solver,
+                return_model = false,
+            )
+            # Reshape the solution data for consistency with other subroutines
+            acopf_solutions = [
+                (nothing, Dict(
+                    key => Dict(
+                        uid => Dict(
+                            attr => device[attr][i] for attr in keys(device)
+                        ) for (uid, device) in devicedict
+                    ) for (key, devicedict) in mpacopf_solution
+                )) for i in periods
+            ]
+        else
+            # This is a non-parallel default. It can solve OPF subproblems
+            # independently or sequentially. This is controlled by the sequential_opf
+            # option.
+            acopf_solutions = compute_optimal_power_flows(
+                processed_data,
+                on_status,
+                real_power;
+                sequential = sequential_opf,
+                optimizer = nlp_optimizer,
+                ipopt_linear_solver = linear_solver,
+                fix_real_power = fix_ac_real_power,
+                penalize_power_deviation = true,
+                allow_switching = allow_switching,
+                resolve_rounded_shunts = resolve_rounded_shunts,
+                fix_shunt_steps = !resolve_rounded_shunts,
+                relax_thermal_limits = relax_thermal_limits,
+                sdd_to_lb = sdd_to_lb,
+                sdd_to_ub = sdd_to_ub,
+            )
+        end
+
+        timing_data["opf_total"] = time() - time_opf_start
+    end # End "!simultaneous_acuc"" clause.
 
     acopf_solve_data = [data for (_, data) in acopf_solutions]
 
@@ -478,8 +533,6 @@ function run_ac_uc_solver(args::Dict)
             println("  $(ac_pr_status), $(obj_val)")
         end
     end
-
-    timing_data["opf_total"] = time() - time_opf_start
 
     #
     # Display results
@@ -523,7 +576,7 @@ function run_ac_uc_solver(args::Dict)
         schedule_data;
         opf_data = acopf_solve_data,
         write_duals = write_duals,
-        include_reserves = false,
+        include_reserves = include_reserves_in_solution,
         postprocess = postprocess_final_solution,
         print_projected_devices = print_projected_devices,
     )

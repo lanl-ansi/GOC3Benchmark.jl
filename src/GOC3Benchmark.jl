@@ -16,6 +16,8 @@ include("scheduler.jl")
 
 include("opf_model.jl")
 
+include("ac_uc_model.jl")
+
 include("process_bounds.jl")
 
 include("opf.jl")

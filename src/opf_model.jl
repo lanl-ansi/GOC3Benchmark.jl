@@ -1630,9 +1630,18 @@ on_status is required so we can distinguish between p_on and p_su/sd.
 function extract_data_from_multiperiod_model(
     model, 
     data,
-    on_status,
+    on_status;
+    p_sdd=nothing,
+    q_sdd=nothing,
 )
     solution_data = Dict{String, Any}()
+
+    if p_sdd === nothing
+        p_sdd = model[:p_sdd]
+    end
+    if q_sdd === nothing
+        q_sdd = model[:q_sdd]
+    end
 
     #
     # Add solution data for buses
@@ -1678,11 +1687,11 @@ function extract_data_from_multiperiod_model(
             # Probably don't even need to include on_status in this dict.
             "on_status" => on_status[uid],
             "p_on" => [0.0 for _ in data.periods],
-            "q" => Vector(JuMP.value.(model[:q_sdd][uid, :])),
+            "q" => Vector(JuMP.value.(q_sdd[uid, :])),
         )
         for i in data.periods
             if Bool(on_status[uid][i])
-                sdd_uid_map["p_on"][i] = JuMP.value(model[:p_sdd][uid, i])
+                sdd_uid_map["p_on"][i] = JuMP.value(p_sdd[uid, i])
             end
         end
         sdd_map[uid] = sdd_uid_map
