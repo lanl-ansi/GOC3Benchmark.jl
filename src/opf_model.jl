@@ -541,7 +541,7 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
     # Power balance constraints
     #
     if relax_p_balance
-        @NLconstraint(model, 
+        @constraint(model, 
             p_balance[uid in bus_ids],
             sum(p_branch[k] for k in bus_branch_keys[uid], init = 0) ==
             sum(p_sdd[ssd_id] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -556,7 +556,7 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
             + (p_balance_slack_pos[uid] - p_balance_slack_neg[uid])
         )
     else
-        @NLconstraint(model, 
+        @constraint(model, 
             p_balance[uid in bus_ids],
             sum(p_branch[k] for k in bus_branch_keys[uid], init = 0) ==
             sum(p_sdd[ssd_id] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -570,7 +570,7 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
         )
     end
     if relax_q_balance
-        @NLconstraint(model, 
+        @constraint(model, 
             q_balance[uid in bus_ids],
             sum(q_branch[k] for k in bus_branch_keys[uid], init = 0) ==
             sum(q_sdd[ssd_id] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -585,7 +585,7 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
             + (q_balance_slack_pos[uid] - q_balance_slack_neg[uid])
         )
     else
-        @NLconstraint(model, 
+        @constraint(model, 
             q_balance[uid in bus_ids],
             sum(q_branch[k] for k in bus_branch_keys[uid], init = 0) ==
             sum(q_sdd[ssd_id] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -656,12 +656,12 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
         JuMP.set_upper_bound(q_to,  10.0*branch["mva_ub_nom"])
 
         # From side of the branch flow
-        JuMP.@NLconstraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
-        JuMP.@NLconstraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
 
         # To side of the branch flow
-        JuMP.@NLconstraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
-        JuMP.@NLconstraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
 
         # Voltage angle difference limit
         JuMP.@constraint(model, vad_lb <= va_fr - va_to <= vad_ub)
@@ -733,12 +733,12 @@ function get_ac_opf_model(data::NamedTuple, period::Int; args=nothing)
         JuMP.set_upper_bound(q_to,  10.0*branch["mva_ub_nom"])
 
         # From side of the branch flow
-        JuMP.@NLconstraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
-        JuMP.@NLconstraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
 
         # To side of the branch flow
-        JuMP.@NLconstraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
-        JuMP.@NLconstraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
 
         # Voltage angle difference limit
         JuMP.@constraint(model, vad_lb <= va_fr - va_to <= vad_ub)
@@ -885,6 +885,7 @@ function get_multiperiod_acopf_model(
     data::NamedTuple;
     args=nothing,
     optimizer=nothing,
+    direct=false,
 )
     if args === nothing
         args = Dict{String, Any}()
@@ -963,8 +964,15 @@ function get_multiperiod_acopf_model(
     bus_shunt_ids = topo_data.bus_shunt_ids
     bus_branch_keys = topo_data.bus_branch_keys
 
+    if direct && optimizer === nothing
+        throw(ArgumentError("Optimizer must be provided to construct direct model"))
+    end
     if optimizer === nothing
         model = JuMP.Model()
+    elseif direct
+        # We assume optimizer is in the form required for a direct model,
+        # e.g. Ipopt.Optimizer() instead of Ipopt.Optimizer
+        model = JuMP.direct_model(optimizer)
     else
         model = JuMP.Model(optimizer)
     end
@@ -1003,7 +1011,7 @@ function get_multiperiod_acopf_model(
     # Create dicts that are ducktype-compatible with JuMP variables
     u_su = Dict((uid, i) => u_su[uid][i] for uid in sdd_ids for i in periods)
     u_sd = Dict((uid, i) => u_sd[uid][i] for uid in sdd_ids for i in periods)
-
+#
     add_real_reactive_linking_constraints!(
         model, data, T_su_pc, T_sd_pc;
         pq=(p_sdd, q_sdd), u_on=on_status, u_susd=(u_su, u_sd), include_reserves = false
@@ -1160,7 +1168,7 @@ function get_multiperiod_acopf_model(
     # although they could be relevant here.
 
     if relax_p_balance
-        @NLconstraint(model,
+        @constraint(model,
             p_balance[uid in bus_ids, i in periods],
             sum(p_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -1175,7 +1183,7 @@ function get_multiperiod_acopf_model(
             + (p_balance_slack_pos[uid, i] - p_balance_slack_neg[uid, i])
         )
     else
-        @NLconstraint(model,
+        @constraint(model,
             p_balance[uid in bus_ids, i in periods],
             sum(p_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(p_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -1189,7 +1197,7 @@ function get_multiperiod_acopf_model(
         )
     end
     if relax_q_balance
-        @NLconstraint(model,
+        @constraint(model,
             q_balance[uid in bus_ids, i in periods],
             sum(q_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -1204,7 +1212,7 @@ function get_multiperiod_acopf_model(
             + (q_balance_slack_pos[uid, i] - q_balance_slack_neg[uid, i])
         )
     else
-        @NLconstraint(model, 
+        @constraint(model, 
             q_balance[uid in bus_ids, i in periods],
             sum(q_branch[k, i] for k in bus_branch_keys[uid], init = 0) ==
             sum(q_sdd[ssd_id, i] for ssd_id in bus_sdd_producer_ids[uid], init = 0) -
@@ -1275,12 +1283,12 @@ function get_multiperiod_acopf_model(
         JuMP.set_upper_bound(q_to,  10.0*branch["mva_ub_nom"])
 
         # From side of the branch flow
-        JuMP.@NLconstraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
-        JuMP.@NLconstraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
 
         # To side of the branch flow
-        JuMP.@NLconstraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
-        JuMP.@NLconstraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
 
         # Voltage angle difference limit
         JuMP.@constraint(model, vad_lb <= va_fr - va_to <= vad_ub)
@@ -1352,12 +1360,12 @@ function get_multiperiod_acopf_model(
         JuMP.set_upper_bound(q_to,  10.0*branch["mva_ub_nom"])
 
         # From side of the branch flow
-        JuMP.@NLconstraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
-        JuMP.@NLconstraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, p_fr ==  (g+g_fr)/ttm*vm_fr^2 + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-b*tr-g*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
+        JuMP.@constraint(model, q_fr == -(b+b_fr)/ttm*vm_fr^2 - (-b*tr-g*ti)/ttm*(vm_fr*vm_to*cos(va_fr-va_to)) + (-g*tr+b*ti)/ttm*(vm_fr*vm_to*sin(va_fr-va_to)) )
 
         # To side of the branch flow
-        JuMP.@NLconstraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
-        JuMP.@NLconstraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, p_to ==  (g+g_to)*vm_to^2 + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-b*tr+g*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
+        JuMP.@constraint(model, q_to == -(b+b_to)*vm_to^2 - (-b*tr+g*ti)/ttm*(vm_to*vm_fr*cos(va_to-va_fr)) + (-g*tr-b*ti)/ttm*(vm_to*vm_fr*sin(va_to-va_fr)) )
 
         # Voltage angle difference limit
         JuMP.@constraint(model, vad_lb <= va_fr - va_to <= vad_ub)
