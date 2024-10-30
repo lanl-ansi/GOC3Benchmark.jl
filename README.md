@@ -45,8 +45,8 @@ is provided in the top-level of this repository. The APIs expected by the
 competition evaluation platform are documented
 [here](https://gocompetition.energy.gov/languages).
 The solver may be run with:
-```
-$ julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1(ProblemFile, TimeLimitInSeconds, Division, NetworkModel, AllowSwitching)' &>MyJulia1.log
+```shell
+julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1(ProblemFile, TimeLimitInSeconds, Division, NetworkModel, AllowSwitching)' &>MyJulia1.log
 ```
 where arguments to `MyJulia1` are as follows:
 | Argument | Julia type | Example |
@@ -58,8 +58,8 @@ where arguments to `MyJulia1` are as follows:
 | `AllowSwitching` | `Int` | 1 |
 
 For example:
-```
-$ julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1("test/data/C3E4N00073D1_scenario_303.json", 600, 1, "C3E4N00073", 1)' &>MyJulia1.log
+```shell
+julia --compiled-modules=no -e 'include("MyJulia1.jl"); MyJulia1("test/data/C3E4N00073D1_scenario_303.json", 600, 1, "C3E4N00073", 1)' &>MyJulia1.log
 ```
 
 When running via this API, solutions are written to `solution.json` in the
@@ -112,6 +112,21 @@ The "subroutines" may be found in the `scheduler.jl`, `opf.jl`, and `reserves.jl
 files. Each of these subproblems build and solve one or more JuMP models.
 The code to construct the models themselves may be found in the
 `scheduling_model.jl`, `opf_model.jl`, and `reserves.jl` files.
+
+## Citing this repository
+
+If you use this software in your research, we would appreciate you citing the following
+publication:
+```bibtex
+@inproceedings{parker2024goc,
+author = {Parker, Robert and Coffrin, Carleton},
+title = {Managing Power Balance and Reserve Feasibility in the {AC} Unit Commitment Problem},
+booktitle = {2024 Power Systems Computation Conference (PSCC)},
+year = {2024},
+month = {June},
+doi = {https://doi.org/10.1016/j.epsr.2024.110670}
+}
+```
 
 ## License
 This software is provided under a BSD license as part of the Grid Optimization
